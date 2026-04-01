@@ -22,6 +22,8 @@ locals {
   }
 
   compute = {
+
+    public_vpc_id       = module.network.public_vpc_id
     eks_cluster_name    = "main-eks-cluster"
     eks_cluster_version = "1.31"
 

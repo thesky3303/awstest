@@ -42,10 +42,6 @@ output "was_pod_replica_count" {
   value = var.was_pod_replica_count
 }
 
-output "alb_dns_name" {
-  value = aws_lb.main_alb.dns_name
-}
-
 output "alb_zone_id" {
   value = aws_lb.main_alb.zone_id
 }

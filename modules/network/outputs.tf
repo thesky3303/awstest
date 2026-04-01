@@ -133,3 +133,4 @@ output "db_replica_from_web_rule" {
     protocol          = aws_security_group_rule.db_replica_from_web_3306.protocol
   }
 }
+

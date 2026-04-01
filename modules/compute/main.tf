@@ -133,6 +133,7 @@ resource "aws_launch_template" "web_node_lt" {
 resource "aws_launch_template" "was_node_lt" {
   name_prefix   = "${var.project_name}-was-node-lt-"
   instance_type = var.was_node_group_instance_type
+  key_name      = var.key_name
   
 
   vpc_security_group_ids = [
@@ -237,18 +238,54 @@ resource "aws_lb" "main_alb" {
   }
 }
 
+resource "aws_lb_target_group" "web_tg" {
+  name        = "${var.project_name}-web-tg"
+  port        = 80
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = var.public_vpc_id
+
+  health_check {
+    enabled             = true
+    protocol            = "HTTP"
+    path                = "/"
+    port                = "traffic-port"
+    matcher             = "200-399"
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 5
+    interval            = 15
+  }
+
+  tags = {
+    Name = "${var.project_name}-web-tg"
+  }
+}
+
+resource "aws_autoscaling_attachment" "web_ng_to_tg" {
+  autoscaling_group_name = aws_eks_node_group.web_node_group.resources[0].autoscaling_groups[0].name
+  lb_target_group_arn    = aws_lb_target_group.web_tg.arn
+}
+
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main_alb.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
-    type = "fixed-response"
-
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "ALB ready"
-      status_code  = "200"
-    }
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web_tg.arn
   }
+
+  depends_on = [
+    aws_autoscaling_attachment.web_ng_to_tg
+  ]
+}
+
+output "alb_dns_name" {
+  value = aws_lb.main_alb.dns_name
+}
+
+output "web_target_group_arn" {
+  value = aws_lb_target_group.web_tg.arn
 }

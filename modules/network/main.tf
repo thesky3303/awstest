@@ -453,6 +453,24 @@ resource "aws_security_group_rule" "was_ssh_from_web" {
   source_security_group_id = aws_security_group.web_node_group_sg.id
 }
 
+resource "aws_security_group_rule" "web_from_alb_80" {
+  type                     = "ingress"
+  from_port                = 80
+  to_port                  = 80
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.web_node_group_sg.id
+  source_security_group_id = aws_security_group.alb_sg.id
+}
+
+resource "aws_security_group_rule" "web_http_from_admin" {
+  type              = "ingress"
+  from_port         = 80
+  to_port           = 80
+  protocol          = "tcp"
+  security_group_id = aws_security_group.web_node_group_sg.id
+  cidr_blocks       = [var.admin_cidr]
+}
+
 
 data "aws_region" "current" {}
 

@@ -36,3 +36,7 @@ variable "was_node_group_sg_id" {
   description = "Security group ID for was node group"
   type        = string
 }
+
+variable "public_vpc_id" {
+  type = string
+}

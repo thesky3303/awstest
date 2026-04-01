@@ -19,6 +19,8 @@ module "network" {
 module "compute" {
   source = "./modules/compute"
 
+  public_vpc_id = local.compute.public_vpc_id
+
   project_name                 = local.network.project_name
   eks_cluster_name             = local.compute.eks_cluster_name
   eks_cluster_version          = local.compute.eks_cluster_version
