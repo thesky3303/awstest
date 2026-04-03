@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sol cinema</title>
+  <link rel="stylesheet" href="/css/common.css">
+  <link rel="stylesheet" href="/css/auth.css">
+  <link rel="stylesheet" href="/css/ticket.css">
+  <link rel="stylesheet" href="/css/booking.css">
+  <link rel="stylesheet" href="/css/inquiry.css">
+  <link rel="stylesheet" href="/css/review.css">
+</head>
+<body>
+  <div id="site-header"></div>
+  <script src="/js/main/head.js"></script>
+  <script src="/js/main/body.js"></script>
+  <div id="main-body"></div>
+
+
+  <main class="container">
+    <section id="home-section" class="page-section active">
+      <h2>홈</h2>
+      <p>티켓팅 웹 서버 테스트 페이지</p>
+      <p>영화 목록에서 영화 ID와 상영 ID를 확인한 뒤 예매와 리뷰를 진행하세요.</p>
+    </section>
+
+    <section id="login-section" class="page-section">
+      <h2>로그인</h2>
+      <div class="form-box">
+        <input type="text" id="login-phone" placeholder="전화번호">
+        <input type="password" id="login-password" placeholder="비밀번호">
+        <button onclick="login()">로그인</button>
+        <p id="login-result"></p>
+      </div>
+    </section>
+
+    <section id="signup-section" class="page-section">
+      <h2>회원가입</h2>
+      <div class="form-box">
+        <input type="text" id="signup-name" placeholder="이름">
+        <input type="text" id="signup-phone" placeholder="전화번호">
+        <input type="password" id="signup-password" placeholder="비밀번호">
+        <button onclick="signup()">회원가입</button>
+        <p id="signup-result"></p>
+      </div>
+    </section>
+
+    <section id="tickets-section" class="page-section">
+      <h2>영화목록</h2>
+      <button onclick="loadTickets()">영화 불러오기</button>
+      <div id="ticket-list" class="list-box"></div>
+    </section>
+
+    <section id="booking-section" class="page-section">
+      <h2>예매</h2>
+      <div class="form-box">
+        <input type="number" id="booking-user-id" placeholder="사용자 ID">
+        <input type="number" id="booking-schedule-id" placeholder="상영 ID(schedule_id)">
+        <input type="number" id="booking-count" placeholder="예매 수량">
+        <button onclick="createBooking()">예매하기</button>
+        <p id="booking-result"></p>
+      </div>
+    </section>
+
+    <section id="inquiry-section" class="page-section">
+      <h2>1:1 문의</h2>
+      <div class="form-box">
+        <input type="number" id="inquiry-user-id" placeholder="사용자 ID">
+        <input type="text" id="inquiry-title" placeholder="문의 제목">
+        <textarea id="inquiry-content" placeholder="문의 내용"></textarea>
+        <button onclick="createInquiry()">문의 등록</button>
+        <p id="inquiry-result"></p>
+      </div>
+    </section>
+
+    <section id="review-section" class="page-section">
+      <h2>리뷰</h2>
+      <div class="form-box">
+        <input type="number" id="review-user-id" placeholder="사용자 ID">
+        <input type="number" id="review-movie-id" placeholder="영화 ID(movie_id)">
+        <input type="number" id="review-rating" placeholder="평점(1~5)">
+        <textarea id="review-content" placeholder="리뷰 내용"></textarea>
+        <button onclick="createReview()">리뷰 등록</button>
+        <p id="review-result"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/read-api.js"></script>
+  <script src="/js/write-api.js"></script>
+  <script src="/js/auth.js"></script>
+  <script src="/js/ticket.js"></script>
+  <script src="/js/booking.js"></script>
+  <script src="/js/inquiry.js"></script>
+  <script src="/js/review.js"></script>
+</body>
+</html>
