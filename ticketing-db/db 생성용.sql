@@ -37,6 +37,7 @@ CREATE TABLE movies (
     runtime_minutes INT NOT NULL DEFAULT 0 COMMENT '상영시간(분)',
     poster_url VARCHAR(255) NULL,
     main_poster_url VARCHAR(255) NULL,
+    video_url VARCHAR(255) NULL COMMENT '동영상 URL 주소',
     audience_count BIGINT NOT NULL DEFAULT 0 COMMENT '누적 관객수',
     release_date DATE NULL,
     synopsis TEXT NULL,

@@ -31,12 +31,16 @@ def get_movies():
                     m.title,
                     m.genre,
                     m.director,
+                    m.runtime_minutes,
                     m.poster_url,
                     m.main_poster_url,
+                    m.video_url,
+                    m.audience_count,
                     m.release_date,
                     m.synopsis,
                     m.status,
-                    m.audience_count,
+                    m.created_at,
+                    m.updated_at,
                     MIN(CASE WHEN s.status = 'OPEN' THEN s.show_date END) AS next_show_date,
                     SUM(CASE WHEN s.status = 'OPEN' THEN s.remain_count ELSE 0 END) AS total_remain_count
                 FROM movies m
@@ -48,12 +52,16 @@ def get_movies():
                     m.title,
                     m.genre,
                     m.director,
+                    m.runtime_minutes,
                     m.poster_url,
                     m.main_poster_url,
+                    m.video_url,
+                    m.audience_count,
                     m.release_date,
                     m.synopsis,
                     m.status,
-                    m.audience_count
+                    m.created_at,
+                    m.updated_at
                 ORDER BY m.movie_id DESC
             """)
             rows = cur.fetchall()
@@ -81,12 +89,16 @@ def get_movie_detail(movie_id):
                     title,
                     genre,
                     director,
+                    runtime_minutes,
                     poster_url,
                     main_poster_url,
+                    video_url,
+                    audience_count,
                     release_date,
                     synopsis,
                     status,
-                    audience_count
+                    created_at,
+                    updated_at
                 FROM movies
                 WHERE movie_id = %s
             """, (movie_id,))
@@ -101,7 +113,11 @@ def get_movie_detail(movie_id):
                     show_date,
                     total_count,
                     remain_count,
-                    status
+                    status,
+                    created_by_admin_id,
+                    updated_by_admin_id,
+                    created_at,
+                    updated_at
                 FROM schedules
                 WHERE movie_id = %s
                 ORDER BY show_date ASC
@@ -113,6 +129,7 @@ def get_movie_detail(movie_id):
                     r.review_id,
                     r.user_id,
                     u.name AS user_name,
+                    r.movie_id,
                     r.rating,
                     r.content,
                     r.review_status,

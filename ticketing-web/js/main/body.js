@@ -5,6 +5,7 @@
   let sliderData = [];
   let currentIndex = 0;
   let autoSlideTimer = null;
+  let isHoveringHero = false;
 
   function ensureBodyCss() {
     const exists = document.querySelector(`link[href="${BODY_CSS_PATH}"]`);
@@ -75,9 +76,26 @@
     return '';
   }
 
-  function goToMovieDetail(movieId) {
-    if (!movieId) return;
-    window.location.href = `/movie/detail.html?movie_id=${movieId}`;
+  function getMovieVideoUrl(movie) {
+    if (!movie) return '';
+
+    const candidates = [
+      movie.video_url,
+      movie.videoUrl,
+      movie.trailer_url,
+      movie.trailerUrl,
+      movie.video,
+      movie.video_path,
+      movie.videoPath,
+      movie.movie_video_url
+    ];
+
+    for (const candidate of candidates) {
+      const value = String(candidate || '').trim();
+      if (value) return value;
+    }
+
+    return '';
   }
 
   function stopAutoSlide() {
@@ -91,11 +109,19 @@
     stopAutoSlide();
 
     if (!sliderData || sliderData.length <= 1) return;
+    if (isHoveringHero) return;
 
     autoSlideTimer = setInterval(() => {
       currentIndex = (currentIndex + 1) % sliderData.length;
       renderCurrentSlide();
     }, AUTO_SLIDE_INTERVAL);
+  }
+
+  function resetAutoSlide() {
+    stopAutoSlide();
+    if (!isHoveringHero) {
+      startAutoSlide();
+    }
   }
 
   function preloadImage(url) {
@@ -127,7 +153,7 @@
         e.stopPropagation();
         currentIndex = index;
         renderCurrentSlide();
-        startAutoSlide();
+        resetAutoSlide();
       });
       indicatorWrap.appendChild(button);
     });
@@ -156,6 +182,160 @@
     }
   }
 
+  function extractYoutubeVideoId(url) {
+    if (!url) return '';
+
+    const value = String(url).trim();
+
+    try {
+      const parsed = new URL(value);
+
+      if (parsed.hostname.includes('youtu.be')) {
+        return parsed.pathname.replace('/', '').trim();
+      }
+
+      if (parsed.hostname.includes('youtube.com')) {
+        if (parsed.pathname === '/watch') {
+          return parsed.searchParams.get('v') || '';
+        }
+
+        if (parsed.pathname.startsWith('/embed/')) {
+          return parsed.pathname.split('/embed/')[1] || '';
+        }
+
+        if (parsed.pathname.startsWith('/shorts/')) {
+          return parsed.pathname.split('/shorts/')[1] || '';
+        }
+      }
+    } catch (e) {
+      console.error('[video] invalid youtube url:', e);
+    }
+
+    return '';
+  }
+
+  function getVideoRenderInfo(videoUrl) {
+    if (!videoUrl) return null;
+
+    const trimmed = String(videoUrl).trim();
+    if (!trimmed) return null;
+
+    const youtubeId = extractYoutubeVideoId(trimmed);
+    if (youtubeId) {
+      return {
+        type: 'youtube',
+        src: `https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0&modestbranding=1`
+      };
+    }
+
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return {
+        type: 'direct',
+        src: trimmed
+      };
+    }
+
+    return null;
+  }
+
+  function closeVideoModal() {
+    const modal = document.getElementById('main-video-modal');
+    if (!modal) return;
+
+    modal.classList.remove('open');
+
+    const frameArea = modal.querySelector('.main-video-modal-media');
+    if (frameArea) {
+      frameArea.innerHTML = '';
+    }
+
+    document.body.classList.remove('main-video-modal-open');
+  }
+
+  function openVideoModal(movie) {
+    const rawVideoUrl = getMovieVideoUrl(movie);
+
+    if (!rawVideoUrl) {
+      console.error('[video] movie data:', movie);
+      alert('재생주소가 없습니다.');
+      return;
+    }
+
+    const videoInfo = getVideoRenderInfo(rawVideoUrl);
+    if (!videoInfo) {
+      console.error('[video] unsupported url:', rawVideoUrl);
+      alert('재생 가능한 영상 주소 형식이 아닙니다.');
+      return;
+    }
+
+    const modal = document.getElementById('main-video-modal');
+    if (!modal) return;
+
+    const mediaNode = modal.querySelector('.main-video-modal-media');
+    if (!mediaNode) return;
+
+    mediaNode.innerHTML = '';
+
+    if (videoInfo.type === 'youtube') {
+      const iframe = document.createElement('iframe');
+      iframe.src = videoInfo.src;
+      iframe.title = `${movie.title || '영화'} 영상 재생`;
+      iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+      iframe.allowFullscreen = true;
+      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+      mediaNode.appendChild(iframe);
+    } else {
+      const video = document.createElement('video');
+      video.src = videoInfo.src;
+      video.controls = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      mediaNode.appendChild(video);
+    }
+
+    modal.classList.add('open');
+    document.body.classList.add('main-video-modal-open');
+  }
+
+  function createVideoModal() {
+    const existing = document.getElementById('main-video-modal');
+    if (existing) return existing;
+
+    const modal = document.createElement('div');
+    modal.id = 'main-video-modal';
+    modal.className = 'main-video-modal';
+
+    modal.innerHTML = `
+      <div class="main-video-modal-backdrop"></div>
+      <div class="main-video-modal-dialog" role="dialog" aria-modal="true" aria-label="영상 재생 모달">
+        <button type="button" class="main-video-modal-close" aria-label="영상 닫기">×</button>
+        <div class="main-video-modal-media"></div>
+      </div>
+    `;
+
+    const backdrop = modal.querySelector('.main-video-modal-backdrop');
+    const closeBtn = modal.querySelector('.main-video-modal-close');
+    const dialog = modal.querySelector('.main-video-modal-dialog');
+
+    backdrop.addEventListener('click', closeVideoModal);
+    closeBtn.addEventListener('click', closeVideoModal);
+
+    modal.addEventListener('click', (e) => {
+      if (!dialog.contains(e.target)) {
+        closeVideoModal();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeVideoModal();
+      }
+    });
+
+    document.body.appendChild(modal);
+    return modal;
+  }
+
   async function renderCurrentSlide() {
     if (!sliderData.length) return;
 
@@ -164,9 +344,9 @@
     const rank = document.getElementById('main-hero-rank');
     const meta = document.getElementById('main-hero-meta');
     const desc = document.getElementById('main-hero-desc');
-    const cta = document.getElementById('main-hero-cta');
+    const infoArea = document.getElementById('main-hero-info-area');
 
-    if (!title || !rank || !meta || !desc || !cta) return;
+    if (!title || !rank || !meta || !desc || !infoArea) return;
 
     await applyHeroBackground(movie);
 
@@ -179,9 +359,9 @@
     ].join(' | ');
     desc.textContent = movie.synopsis || '상세 줄거리가 준비 중입니다.';
 
-    cta.onclick = (e) => {
+    infoArea.onclick = (e) => {
       e.stopPropagation();
-      goToMovieDetail(movie.movie_id);
+      openVideoModal(movie);
     };
 
     renderIndicators();
@@ -197,7 +377,7 @@
     }
 
     renderCurrentSlide();
-    startAutoSlide();
+    resetAutoSlide();
   }
 
   function createHeroLayout() {
@@ -212,26 +392,37 @@
 
         <button type="button" class="main-hero-arrow main-hero-arrow-left" aria-label="이전 영화 보기">&lt;</button>
 
-        <div class="main-hero-content">
-          <div id="main-hero-rank" class="main-hero-rank">TOP 1</div>
-          <h2 id="main-hero-title" class="main-hero-title">영화 제목</h2>
-          <div id="main-hero-meta" class="main-hero-meta"></div>
-          <p id="main-hero-desc" class="main-hero-desc"></p>
+        <div
+          id="main-hero-info-area"
+          class="main-hero-info-area"
+          role="button"
+          tabindex="0"
+          aria-label="영화 영상 재생"
+        >
+          <div class="main-hero-content">
+            <div class="main-hero-text-wrap">
+              <div id="main-hero-rank" class="main-hero-rank">TOP 1</div>
+              <h2 id="main-hero-title" class="main-hero-title">영화 제목</h2>
+              <div id="main-hero-meta" class="main-hero-meta"></div>
+              <p id="main-hero-desc" class="main-hero-desc"></p>
+            </div>
 
-          <div class="main-hero-buttons">
-            <button type="button" id="main-hero-cta" class="main-hero-detail-button">상세보기</button>
+            <div class="main-hero-play-mark" aria-hidden="true">
+              <span class="main-hero-play-mark-icon"></span>
+            </div>
           </div>
         </div>
 
         <button type="button" class="main-hero-arrow main-hero-arrow-right" aria-label="다음 영화 보기">&gt;</button>
-
-        <div id="main-hero-indicators" class="main-hero-indicators"></div>
       </div>
+
+      <div id="main-hero-indicators" class="main-hero-indicators"></div>
     `;
 
     const hero = section.querySelector('#main-hero');
     const leftArrow = section.querySelector('.main-hero-arrow-left');
     const rightArrow = section.querySelector('.main-hero-arrow-right');
+    const infoArea = section.querySelector('#main-hero-info-area');
 
     leftArrow.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -243,24 +434,24 @@
       moveSlide('next');
     });
 
+    infoArea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const movie = sliderData[currentIndex];
+        openVideoModal(movie);
+      }
+    });
+
     hero.addEventListener('mouseenter', () => {
+      isHoveringHero = true;
+      resetAutoSlide();
       hero.classList.add('hovered');
-      stopAutoSlide();
     });
 
     hero.addEventListener('mouseleave', () => {
+      isHoveringHero = false;
       hero.classList.remove('hovered');
-      startAutoSlide();
-    });
-
-    hero.addEventListener('click', (e) => {
-      if (e.target.closest('.main-hero-arrow')) return;
-      if (e.target.closest('.main-hero-detail-button')) return;
-
-      const movie = sliderData[currentIndex];
-      if (movie && movie.movie_id) {
-        goToMovieDetail(movie.movie_id);
-      }
+      resetAutoSlide();
     });
 
     return section;
@@ -278,6 +469,7 @@
 
   async function mountBody() {
     ensureBodyCss();
+    createVideoModal();
 
     const mount = ensureMountPoint();
     mount.innerHTML = `
@@ -315,7 +507,8 @@
   }
 
   window.renderMainBody = mountBody;
-  window.goToMovieDetail = goToMovieDetail;
+  window.closeMainVideoModal = closeVideoModal;
+  window.openMainVideoModal = openVideoModal;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', mountBody);
