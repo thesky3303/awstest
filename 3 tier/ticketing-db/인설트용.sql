@@ -1,6 +1,0 @@
-INSERT INTO movies VALUES
-(1, '봄 콘서트', '콘서트', '드림기획', 90, '/images/test.png', NULL, NULL, 0, '2026-04-03', '따뜻한 봄 분위기와 함께 다양한 아티스트의 무대를 즐길 수 있는 공연입니다.', 'ACTIVE', '2026-04-03 14:32:19', '2026-04-03 18:45:48'),
-(2, '프로젝트 헤일메리', 'SF', '필로드', 156, '/images/posters/hail.jpg', '/images/posters/main_hail.jpg', 'https://www.youtube.com/watch?v=GC2SR2MGdck', 1543200, '2026-03-15', '죽어가는 태양, 종말 위기에 놓인 지구', 'ACTIVE', '2026-04-03 21:01:25', '2026-04-04 16:50:55'),
-(3, '호퍼스', '애니메이션', '다니엘 총', 104, '/images/posters/ho.jpg', '/images/posters/main_ho.jpg', 'https://www.youtube.com/watch?v=qNIYD3yzG-U', 2875400, '2026-02-20', '디즈니·픽사의 가장 사랑스러운 애니멀 어드벤처가 온다!', 'ACTIVE', '2026-04-03 21:01:25', '2026-04-04 16:50:23'),
-(4, '위 리브 인', '멜로/로맨스', '존 크로울리', 108, '/images/posters/we.jpg', '/images/posters/main_we.jpg', 'https://www.youtube.com/watch?v=qqlfn-T-OFA', 980300, '2026-01-30', '우리의 사랑은 함께한 시간에 영원히 남는다.', 'ACTIVE', '2026-04-03 21:01:25', '2026-04-04 16:52:01'),
-(5, '왕과 사는 남자', '드라마', '장항준', 117, '/images/posters/king.jpg', '/images/posters/main_king.jpg', 'https://www.youtube.com/watch?v=9sxEZuJskvM', 3218700, '2026-03-28', '1457년 청령포, 역사가 지우려 했던 이야기', 'ACTIVE', '2026-04-03 21:01:25', '2026-04-04 16:51:31');
