@@ -1,21 +1,43 @@
 <!DOCTYPE html>
 <html lang="ko">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sol cinema</title>
-</head>
-<body>
-  <div id="site-header"></div>
-  <div id="main-body"></div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sol cinema</title>
 
-  <script src="/js/api/read-api.js"></script>
-  <script src="/js/api/write-api.js"></script>
+    <script src="/js/common/read-api.js"></script>
+    <script src="/js/common/write-api.js"></script>
+    <script src="/js/common/app-config.js"></script>
+    <script src="/js/common/image-resolver.js"></script>
+    <script src="/js/main/head.js"></script>
+    <script src="/js/user/login.js"></script>
+    <script src="/js/main/router.js"></script>
+  </head>
 
-  <script src="/js/main/head.js"></script>
-  <script src="/js/main/body.js"></script>
-  <script src="/js/main/body2.js"></script>
-  <script src="/js/main/body3.js"></script>
+  <body>
+    <div id="site-header"></div>
+    <div id="main-body"></div>
 
-</body>
+    <div style="position: fixed; top: 10px; left: 10px; z-index: 99999;">
+      <button id="flush-redis-btn" type="button">Redis 초기화</button>
+    </div>
+
+    <script>
+      (function () {
+        const button = document.getElementById('flush-redis-btn');
+        if (!button) return;
+
+        button.addEventListener('click', async () => {
+          try {
+            const data = await writeApi('/admin/cache/rebuild-all');
+            console.log('cache rebuild result:', data);
+            alert(data.message || 'Redis 초기화가 완료되었습니다.');
+          } catch (error) {
+            console.error(error);
+            alert(error.message || 'Redis 초기화 중 오류가 발생했습니다.');
+          }
+        });
+      })();
+    </script>
+  </body>
 </html>

@@ -41,7 +41,9 @@ CREATE TABLE movies (
     audience_count BIGINT NOT NULL DEFAULT 0 COMMENT '누적 관객수',
     release_date DATE NULL,
     synopsis TEXT NULL,
+    synopsis_line TEXT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    hide CHAR(1) NOT NULL DEFAULT 'N' COMMENT '숨김여부(Y/N)',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
@@ -194,5 +196,3 @@ CREATE INDEX idx_admin_login_logs_admin_id ON admin_login_logs(admin_id);
 CREATE INDEX idx_admin_action_logs_admin_id ON admin_action_logs(admin_id);
 CREATE INDEX idx_admin_action_logs_target ON admin_action_logs(target_type, target_id);
 
-
-select * from movies;

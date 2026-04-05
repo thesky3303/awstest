@@ -1,0 +1,29 @@
+1. 기본 설정
+
+vi /etc/selinux/config
+SELINUX=disabled
+
+아이피 변경
+nmcli connection modify ens160 ipv4.addresses 192.168.10.23/24
+nmcli connection up ens160
+
+2. 패키지 설치
+dnf install -y mysql-server
+systemctl enable --now mysqld
+
+3. 공유 폴더
+mkdir -p /mnt/hgfs/ticketing-db
+dnf install -y open-vm-tools open-vm-tools-desktop fuse
+systemctl enable --now vmtoolsd
+
+vmhgfs-fuse .host:/ticketing-db /mnt/hgfs/ticketing-db -o allow_other
+
+cat <<'EOF' >> /etc/fstab
+.host:/ticketing-db /mnt/hgfs/ticketing-db fuse.vmhgfs-fuse allow_other,defaults 0 0
+EOF
+
+systemctl daemon-reload
+mount -a
+
+4. 디비접속
+mysql -u root -p

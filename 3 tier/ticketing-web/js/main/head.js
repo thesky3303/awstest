@@ -4,13 +4,42 @@
   const LOGIN_STORAGE_KEY = 'loginUser';
 
   function ensureHeadCss() {
-    const exists = document.querySelector(`link[href="${HEADER_CSS_PATH}"]`);
-    if (exists) return;
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`link[href="${HEADER_CSS_PATH}"]`);
 
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = HEADER_CSS_PATH;
-    document.head.appendChild(link);
+      if (existing) {
+        if (existing.dataset.loaded === 'true') {
+          resolve();
+          return;
+        }
+
+        existing.addEventListener('load', () => {
+          existing.dataset.loaded = 'true';
+          resolve();
+        }, { once: true });
+
+        existing.addEventListener('error', () => {
+          reject(new Error('head.css load fail'));
+        }, { once: true });
+
+        return;
+      }
+
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = HEADER_CSS_PATH;
+
+      link.addEventListener('load', () => {
+        link.dataset.loaded = 'true';
+        resolve();
+      }, { once: true });
+
+      link.addEventListener('error', () => {
+        reject(new Error('head.css load fail'));
+      }, { once: true });
+
+      document.head.appendChild(link);
+    });
   }
 
   function getLoginUser() {
@@ -19,7 +48,10 @@
       if (!raw) return null;
 
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return null;
+      if (!parsed || typeof parsed !== 'object') {
+        localStorage.removeItem(LOGIN_STORAGE_KEY);
+        return null;
+      }
 
       if (parsed.expiresAt && Date.now() > Number(parsed.expiresAt)) {
         localStorage.removeItem(LOGIN_STORAGE_KEY);
@@ -42,7 +74,7 @@
     }
 
     const alreadyLoaded = Array.from(document.scripts).some(
-      script => script.src && script.src.includes(scriptPath)
+      (script) => script.src && script.src.includes(scriptPath)
     );
 
     if (alreadyLoaded) {
@@ -62,17 +94,56 @@
     document.body.appendChild(script);
   }
 
-  function openLogin() {
+  function navigateHome(e) {
+    if (e) e.preventDefault();
+
+    if (typeof window.appNavigate === 'function') {
+      window.appNavigate({}, { replace: false });
+      return;
+    }
+
+    window.location.href = '/';
+  }
+
+  function openLogin(e) {
+    if (e) e.preventDefault();
     callExternalHandler('/js/user/login.js', 'openLoginPage');
   }
 
-  function openMyPage() {
+  function openMyPage(e) {
+    if (e) e.preventDefault();
+
+    if (typeof window.appNavigate === 'function') {
+      window.appNavigate({ view: 'mypage' });
+      return;
+    }
+
     callExternalHandler('/js/user/mypage.js', 'openMyPage');
+  }
+
+  function openMoviePage(e) {
+    if (e) {
+      e.preventDefault();
+    }
+
+    if (typeof window.appNavigate === 'function') {
+      window.appNavigate({ page: 1 });
+      return;
+    }
+
+    callExternalHandler('/js/movie/movie_main.js', 'renderMovieMain');
   }
 
   function logout() {
     localStorage.removeItem(LOGIN_STORAGE_KEY);
+
+    if (typeof window.closeLoginPage === 'function') {
+      window.closeLoginPage();
+    }
+
     mountHeader();
+    alert('로그아웃 되었습니다.');
+    window.location.href = '/';
   }
 
   function createAuthArea(user) {
@@ -97,7 +168,11 @@
       logoutButton.type = 'button';
       logoutButton.className = 'site-header-logout-button';
       logoutButton.textContent = '로그아웃';
-      logoutButton.addEventListener('click', logout);
+      logoutButton.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        logout();
+      });
 
       topRow.appendChild(nameButton);
       topRow.appendChild(divider);
@@ -124,17 +199,22 @@
 
     const menuItems = [
       { label: '예매', href: '#' },
-      { label: '영화', href: '#' },
+      { label: '영화', href: '#', onClick: openMoviePage },
       { label: '영화관', href: '#' },
       { label: '공지사항', href: '#' },
       { label: '고객센터', href: '#' }
     ];
 
-    menuItems.forEach(item => {
+    menuItems.forEach((item) => {
       const a = document.createElement('a');
       a.href = item.href;
       a.className = 'site-header-menu-item';
       a.textContent = item.label;
+
+      if (typeof item.onClick === 'function') {
+        a.addEventListener('click', item.onClick);
+      }
+
       nav.appendChild(a);
     });
 
@@ -160,6 +240,7 @@
     logoLink.href = '/';
     logoLink.className = 'site-header-logo-link';
     logoLink.setAttribute('aria-label', '홈으로 이동');
+    logoLink.addEventListener('click', navigateHome);
 
     const logoImg = document.createElement('img');
     logoImg.src = LOGO_PATH;
@@ -189,8 +270,12 @@
     return header;
   }
 
-  function mountHeader() {
-    ensureHeadCss();
+  async function mountHeader() {
+    try {
+      await ensureHeadCss();
+    } catch (error) {
+      console.error(error);
+    }
 
     const existing = document.getElementById('site-header');
     const header = createHeader();
@@ -198,11 +283,13 @@
     if (existing) {
       existing.innerHTML = '';
       existing.appendChild(header);
+      existing.style.visibility = 'visible';
       return;
     }
 
     const wrapper = document.createElement('div');
     wrapper.id = 'site-header';
+    wrapper.style.visibility = 'visible';
     wrapper.appendChild(header);
 
     document.body.prepend(wrapper);
@@ -210,6 +297,8 @@
 
   window.renderSiteHeader = mountHeader;
   window.refreshSiteHeader = mountHeader;
+  window.logoutUser = logout;
+  window.openMoviePage = openMoviePage;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', mountHeader);

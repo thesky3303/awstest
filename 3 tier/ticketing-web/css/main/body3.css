@@ -57,8 +57,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
-  line-height: 1;
+  width: 16px;
+  height: 16px;
+  color: #ffffff;
+  flex: 0 0 16px;
+}
+
+.main-body3-call-svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  color: inherit;
 }
 
 .main-body3-bottom .main-body3-inner {
@@ -131,6 +140,13 @@
     padding: 0 14px;
   }
 
+  .main-body3-call-icon,
+  .main-body3-call-svg {
+    width: 15px;
+    height: 15px;
+    flex-basis: 15px;
+  }
+
   .main-body3-title {
     font-size: 22px;
   }
@@ -161,8 +177,11 @@
     padding: 0 13px;
   }
 
-  .main-body3-call-icon {
-    font-size: 13px;
+  .main-body3-call-icon,
+  .main-body3-call-svg {
+    width: 14px;
+    height: 14px;
+    flex-basis: 14px;
   }
 
   .main-body3-bottom .main-body3-inner {

@@ -1,10 +1,13 @@
 (function () {
   const LOGIN_CSS_PATH = '/css/user/login.css';
   const LOGIN_STORAGE_KEY = 'loginUser';
+  const REMEMBER_ID_STORAGE_KEY = 'rememberedLoginId';
   const LOGIN_EXPIRE_MINUTES = 120;
-  const LOGIN_API_URL = '/user/login';
+  const LOGIN_API = '/api/read/auth/login';
+  const HOME_URL = '/';
 
   let savedScrollY = 0;
+  let isLoginSubmitting = false;
 
   function ensureLoginCss() {
     return new Promise((resolve, reject) => {
@@ -15,11 +18,14 @@
           return;
         }
 
-        existing.addEventListener('load', () => {
-          existing.dataset.loaded = 'true';
-          resolve();
-        }, { once: true });
-
+        existing.addEventListener(
+          'load',
+          () => {
+            existing.dataset.loaded = 'true';
+            resolve();
+          },
+          { once: true }
+        );
         existing.addEventListener('error', reject, { once: true });
         return;
       }
@@ -28,30 +34,109 @@
       link.rel = 'stylesheet';
       link.href = LOGIN_CSS_PATH;
 
-      link.addEventListener('load', () => {
-        link.dataset.loaded = 'true';
-        resolve();
-      }, { once: true });
-
+      link.addEventListener(
+        'load',
+        () => {
+          link.dataset.loaded = 'true';
+          resolve();
+        },
+        { once: true }
+      );
       link.addEventListener('error', reject, { once: true });
 
       document.head.appendChild(link);
     });
   }
 
-  function getExpireTime(keepLogin) {
-    if (keepLogin) {
-      return Date.now() + 7 * 24 * 60 * 60 * 1000;
-    }
+  function ensureScript(src) {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${src}"]`);
+      if (existing) {
+        if (existing.dataset.loaded === 'true') {
+          resolve();
+          return;
+        }
+
+        existing.addEventListener(
+          'load',
+          () => {
+            existing.dataset.loaded = 'true';
+            resolve();
+          },
+          { once: true }
+        );
+        existing.addEventListener('error', reject, { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = src;
+      script.defer = true;
+
+      script.addEventListener(
+        'load',
+        () => {
+          script.dataset.loaded = 'true';
+          resolve();
+        },
+        { once: true }
+      );
+      script.addEventListener('error', reject, { once: true });
+
+      document.body.appendChild(script);
+    });
+  }
+
+  function getExpireTime() {
     return Date.now() + LOGIN_EXPIRE_MINUTES * 60 * 1000;
   }
 
-  function saveLoginUser(userData, keepLogin) {
+  function saveLoginUser(userData) {
     const payload = {
       ...userData,
-      expiresAt: getExpireTime(keepLogin)
+      expiresAt: getExpireTime()
     };
     localStorage.setItem(LOGIN_STORAGE_KEY, JSON.stringify(payload));
+  }
+
+  function getLoginUser() {
+    const raw = localStorage.getItem(LOGIN_STORAGE_KEY);
+    if (!raw) return null;
+
+    try {
+      const parsed = JSON.parse(raw);
+
+      if (!parsed || typeof parsed !== 'object') {
+        localStorage.removeItem(LOGIN_STORAGE_KEY);
+        return null;
+      }
+
+      if (!parsed.expiresAt || Date.now() > Number(parsed.expiresAt)) {
+        localStorage.removeItem(LOGIN_STORAGE_KEY);
+        return null;
+      }
+
+      return parsed;
+    } catch (error) {
+      localStorage.removeItem(LOGIN_STORAGE_KEY);
+      return null;
+    }
+  }
+
+  function clearLoginUser() {
+    localStorage.removeItem(LOGIN_STORAGE_KEY);
+  }
+
+  function getRememberedLoginId() {
+    return localStorage.getItem(REMEMBER_ID_STORAGE_KEY) || '';
+  }
+
+  function saveRememberedLoginId(loginId) {
+    localStorage.setItem(REMEMBER_ID_STORAGE_KEY, loginId);
+  }
+
+  function clearRememberedLoginId() {
+    localStorage.removeItem(REMEMBER_ID_STORAGE_KEY);
   }
 
   function lockBodyScroll() {
@@ -80,11 +165,11 @@
   }
 
   function clearErrors(modal) {
-    const idError = modal.querySelector('.login-field-error[data-error-for="login_id"]');
+    const phoneError = modal.querySelector('.login-field-error[data-error-for="phone"]');
     const pwError = modal.querySelector('.login-field-error[data-error-for="password"]');
     const commonError = modal.querySelector('.login-common-error');
 
-    if (idError) idError.textContent = '';
+    if (phoneError) phoneError.textContent = '';
     if (pwError) pwError.textContent = '';
     if (commonError) commonError.textContent = '';
   }
@@ -102,15 +187,30 @@
   function closeLoginPage() {
     const overlay = document.getElementById('login-modal-overlay');
     if (overlay) overlay.remove();
+    isLoginSubmitting = false;
     unlockBodyScroll();
   }
 
-  function moveToUserPage(path) {
+  function redirectToHome() {
+    window.location.href = HOME_URL;
+  }
+
+  function logoutUser() {
+    clearLoginUser();
     closeLoginPage();
-    window.location.href = path;
+
+    if (typeof window.refreshSiteHeader === 'function') {
+      window.refreshSiteHeader();
+    }
+
+    alert('로그아웃 되었습니다.');
+    redirectToHome();
   }
 
   function buildModalHtml() {
+    const rememberedLoginId = getRememberedLoginId();
+    const isRemembered = rememberedLoginId !== '';
+
     const overlay = document.createElement('div');
     overlay.id = 'login-modal-overlay';
     overlay.className = 'login-modal-overlay';
@@ -128,12 +228,15 @@
           <div class="login-form-group">
             <input
               type="text"
-              name="login_id"
+              name="phone"
               class="login-input"
-              placeholder="아이디"
+              placeholder="전화번호"
               autocomplete="username"
+              inputmode="numeric"
+              maxlength="11"
+              value="${rememberedLoginId}"
             />
-            <div class="login-field-error" data-error-for="login_id"></div>
+            <div class="login-field-error" data-error-for="phone"></div>
           </div>
 
           <div class="login-form-group">
@@ -148,8 +251,8 @@
           </div>
 
           <label class="login-keep-wrap">
-            <input type="checkbox" name="keep_login" class="login-keep-checkbox" />
-            <span>로그인 유지</span>
+            <input type="checkbox" name="remember_id" class="login-keep-checkbox" ${isRemembered ? 'checked' : ''} />
+            <span>아이디 기억</span>
           </label>
 
           <div class="login-common-error"></div>
@@ -157,11 +260,9 @@
           <button type="submit" class="login-submit-button">로그인</button>
 
           <div class="login-modal-links">
-            <button type="button" class="login-link-button" data-route="/user/find-id">ID 찾기</button>
+            <button type="button" class="login-link-button" data-action="pwfind">PW 찾기</button>
             <span class="login-link-divider">|</span>
-            <button type="button" class="login-link-button" data-route="/user/find-password">PW 찾기</button>
-            <span class="login-link-divider">|</span>
-            <button type="button" class="login-link-button" data-route="/user/signup">회원가입</button>
+            <button type="button" class="login-link-button" data-action="signup">회원가입</button>
           </div>
         </form>
       </div>
@@ -178,180 +279,218 @@
       };
     }
 
-    if (data.success === true || data.result === 'OK') {
+    if (data.message === 'login success' && data.user) {
       return {
         success: true,
-        user: data.user || data.data || {
-          user_id: data.user_id,
-          login_id: data.login_id,
-          name: data.name,
-          user_name: data.user_name
+        user: data.user
+      };
+    }
+
+    if (data.message === 'invalid input') {
+      return {
+        success: false,
+        fieldErrors: {
+          phone: '전화번호를 입력해 주세요.',
+          password: '비밀번호를 입력해 주세요.'
         }
       };
     }
 
-    if (data.fieldErrors) {
-      return {
-        success: false,
-        fieldErrors: data.fieldErrors,
-        commonMessage: data.message || ''
-      };
-    }
-
-    if (data.code === 'INVALID_ID') {
+    if (data.message === '전화번호가 틀립니다.') {
       return {
         success: false,
         fieldErrors: {
-          login_id: data.message || '아이디가 틀렸습니다.'
+          phone: '전화번호가 틀립니다.'
         }
       };
     }
 
-    if (data.code === 'INVALID_PASSWORD') {
+    if (data.message === '비밀번호가 틀립니다.') {
       return {
         success: false,
         fieldErrors: {
-          password: data.message || '비밀번호가 틀렸습니다.'
+          password: '비밀번호가 틀립니다.'
         }
       };
     }
 
     return {
       success: false,
-      commonMessage: data.message || '아이디 또는 비밀번호를 확인해 주세요.'
+      commonMessage: data.message || '서버와 통신 중 문제가 발생했습니다.'
     };
   }
 
-  async function requestLogin(loginId, password) {
-    const response = await fetch(LOGIN_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        login_id: loginId,
-        password: password
-      })
-    });
+  async function requestLogin(phone, password) {
+    let response;
 
-    let data = null;
+    try {
+      response = await fetch(LOGIN_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          phone: phone,
+          password: password
+        })
+      });
+    } catch (error) {
+      console.error('login fetch error:', error);
+      return {
+        success: false,
+        commonMessage: '서버와 통신 중 문제가 발생했습니다.'
+      };
+    }
+
+    let data = {};
     try {
       data = await response.json();
     } catch (e) {
-      data = null;
+      data = {};
     }
 
-    if (!response.ok) {
-      return normalizeResponse(data || {
+    if (!response.ok && !data.message) {
+      return {
         success: false,
-        message: '서버와 통신 중 문제가 발생했습니다.'
-      });
+        commonMessage: `서버 오류 (${response.status})`
+      };
     }
 
     return normalizeResponse(data);
   }
 
-  function bindModalEvents(overlay) {
-    const modal = overlay.querySelector('.login-modal');
-    const closeButton = overlay.querySelector('.login-modal-close');
-    const form = overlay.querySelector('.login-form');
-    const idInput = overlay.querySelector('input[name="login_id"]');
-    const pwInput = overlay.querySelector('input[name="password"]');
-    const keepLoginInput = overlay.querySelector('input[name="keep_login"]');
-    const linkButtons = overlay.querySelectorAll('.login-link-button');
+  async function openPwFindPage() {
+    try {
+      await ensureScript('/js/user/pwfind.js');
+      closeLoginPage();
 
-    closeButton.addEventListener('click', closeLoginPage);
-
-    overlay.addEventListener('click', function (e) {
-      if (e.target === overlay) {
-        closeLoginPage();
-      }
-    });
-
-    document.addEventListener('keydown', function escHandler(e) {
-      const currentOverlay = document.getElementById('login-modal-overlay');
-      if (!currentOverlay) {
-        document.removeEventListener('keydown', escHandler);
+      if (typeof window.openPwFindPage === 'function') {
+        window.openPwFindPage();
         return;
       }
 
-      if (e.key === 'Escape') {
-        closeLoginPage();
+      alert('PW 찾기 화면을 불러오지 못했습니다.');
+    } catch (error) {
+      console.error('pwfind.js load error:', error);
+      alert('PW 찾기 화면을 불러오지 못했습니다.');
+    }
+  }
+
+  async function openSignupPage() {
+    try {
+      await ensureScript('/js/user/signup.js');
+      closeLoginPage();
+
+      if (typeof window.openSignupPage === 'function') {
+        window.openSignupPage();
+        return;
       }
+
+      alert('회원가입 화면을 불러오지 못했습니다.');
+    } catch (error) {
+      console.error('signup.js load error:', error);
+      alert('회원가입 화면을 불러오지 못했습니다.');
+    }
+  }
+
+  function bindModalEvents(overlay) {
+    const closeButton = overlay.querySelector('.login-modal-close');
+    const form = overlay.querySelector('.login-form');
+    const phoneInput = overlay.querySelector('input[name="phone"]');
+    const pwInput = overlay.querySelector('input[name="password"]');
+    const rememberIdInput = overlay.querySelector('input[name="remember_id"]');
+    const linkButtons = overlay.querySelectorAll('.login-link-button');
+    const submitButton = form.querySelector('.login-submit-button');
+
+    closeButton.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeLoginPage();
     });
 
-    idInput.addEventListener('input', function () {
-      setFieldError(modal, 'login_id', '');
-      setCommonError(modal, '');
+    phoneInput.addEventListener('input', function () {
+      phoneInput.value = phoneInput.value.replace(/\D/g, '').slice(0, 11);
+      setFieldError(overlay, 'phone', '');
+      setCommonError(overlay, '');
     });
 
     pwInput.addEventListener('input', function () {
-      setFieldError(modal, 'password', '');
-      setCommonError(modal, '');
+      setFieldError(overlay, 'password', '');
+      setCommonError(overlay, '');
     });
 
     linkButtons.forEach(button => {
       button.addEventListener('click', function () {
-        const route = button.dataset.route;
-        if (!route) return;
-        moveToUserPage(route);
+        const action = button.dataset.action;
+
+        if (action === 'pwfind') {
+          openPwFindPage();
+          return;
+        }
+
+        if (action === 'signup') {
+          openSignupPage();
+        }
       });
     });
 
     form.addEventListener('submit', async function (e) {
       e.preventDefault();
-      clearErrors(modal);
 
-      const loginId = idInput.value.trim();
-      const password = pwInput.value.trim();
-      const keepLogin = keepLoginInput.checked;
-      const submitButton = form.querySelector('.login-submit-button');
+      if (isLoginSubmitting) {
+        return;
+      }
+
+      clearErrors(overlay);
+
+      const phone = phoneInput.value.trim();
+      const password = pwInput.value;
+      const rememberId = rememberIdInput.checked;
 
       let hasError = false;
 
-      if (!loginId) {
-        setFieldError(modal, 'login_id', '아이디를 입력해 주세요.');
+      if (!phone) {
+        setFieldError(overlay, 'phone', '전화번호를 입력해 주세요.');
         hasError = true;
       }
 
       if (!password) {
-        setFieldError(modal, 'password', '비밀번호를 입력해 주세요.');
+        setFieldError(overlay, 'password', '비밀번호를 입력해 주세요.');
         hasError = true;
       }
 
       if (hasError) return;
 
+      isLoginSubmitting = true;
       submitButton.disabled = true;
       submitButton.textContent = '로그인 중...';
 
       try {
-        const result = await requestLogin(loginId, password);
+        const result = await requestLogin(phone, password);
 
         if (!result.success) {
-          if (result.fieldErrors?.login_id) {
-            setFieldError(modal, 'login_id', result.fieldErrors.login_id);
+          if (result.fieldErrors?.phone) {
+            setFieldError(overlay, 'phone', result.fieldErrors.phone);
           }
 
           if (result.fieldErrors?.password) {
-            setFieldError(modal, 'password', result.fieldErrors.password);
+            setFieldError(overlay, 'password', result.fieldErrors.password);
           }
 
           if (result.commonMessage) {
-            setCommonError(modal, result.commonMessage);
-          }
-
-          if (!result.fieldErrors?.login_id && !result.fieldErrors?.password && !result.commonMessage) {
-            setCommonError(modal, '아이디 또는 비밀번호를 확인해 주세요.');
+            setCommonError(overlay, result.commonMessage);
           }
 
           return;
         }
 
-        saveLoginUser(result.user || {
-          login_id: loginId,
-          name: '회원'
-        }, keepLogin);
+        if (rememberId) {
+          saveRememberedLoginId(phone);
+        } else {
+          clearRememberedLoginId();
+        }
 
+        saveLoginUser(result.user);
         closeLoginPage();
 
         if (typeof window.refreshSiteHeader === 'function') {
@@ -359,8 +498,9 @@
         }
       } catch (error) {
         console.error('login error:', error);
-        setCommonError(modal, '서버와 통신 중 문제가 발생했습니다.');
+        setCommonError(overlay, '서버와 통신 중 문제가 발생했습니다.');
       } finally {
+        isLoginSubmitting = false;
         submitButton.disabled = false;
         submitButton.textContent = '로그인';
       }
@@ -369,6 +509,7 @@
 
   async function openLoginPage() {
     removeExistingModal();
+    isLoginSubmitting = false;
 
     try {
       await ensureLoginCss();
@@ -382,7 +523,7 @@
 
     bindModalEvents(overlay);
 
-    const firstInput = overlay.querySelector('input[name="login_id"]');
+    const firstInput = overlay.querySelector('input[name="phone"]');
     if (firstInput) {
       requestAnimationFrame(() => firstInput.focus());
     }
@@ -390,4 +531,7 @@
 
   window.openLoginPage = openLoginPage;
   window.closeLoginPage = closeLoginPage;
+  window.getLoginUser = getLoginUser;
+  window.clearLoginUser = clearLoginUser;
+  window.logoutUser = logoutUser;
 })();

@@ -34,33 +34,6 @@
     return mount;
   }
 
-  function extractFileName(path) {
-    if (!path) return '';
-    const normalized = String(path).replaceAll('\\', '/');
-    const parts = normalized.split('/');
-    return parts[parts.length - 1] || '';
-  }
-
-  function normalizeImageUrl(url) {
-    if (!url) return '';
-
-    const value = String(url).trim();
-    if (!value) return '';
-
-    if (value.startsWith('http://') || value.startsWith('https://')) {
-      return value;
-    }
-
-    if (value.startsWith('/')) {
-      return value;
-    }
-
-    if (value.includes('/mnt/hgfs/')) {
-      return `/images/${extractFileName(value)}`;
-    }
-
-    return `/${value}`;
-  }
 
   function getMainPosterUrl(movie) {
     const candidates = [
@@ -69,7 +42,10 @@
     ];
 
     for (const candidate of candidates) {
-      const url = normalizeImageUrl(candidate);
+      const url = typeof window.resolveImageUrl === 'function'
+        ? window.resolveImageUrl(candidate)
+        : String(candidate || '').trim();
+
       if (url) return url;
     }
 

@@ -40,7 +40,14 @@
       <div class="main-body3-top">
         <div class="main-body3-inner">
           <a href="tel:1544-0714" class="main-body3-call-button">
-            <span class="main-body3-call-icon">📞</span>
+            <span class="main-body3-call-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" class="main-body3-call-svg" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M21 16.42V19.5C21 20.05 20.55 20.5 20 20.5C10.34 20.5 2.5 12.66 2.5 3C2.5 2.45 2.95 2 3.5 2H6.59C7.07 2 7.48 2.34 7.57 2.81L8.07 5.5C8.15 5.91 8.01 6.33 7.7 6.62L5.84 8.33C7.03 10.76 8.99 12.72 11.42 13.91L13.13 12.05C13.42 11.74 13.84 11.6 14.25 11.68L16.94 12.18C17.41 12.27 17.75 12.68 17.75 13.16V16.42H21Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </span>
             <span>대표번호 : 1544-0714</span>
           </a>
         </div>
@@ -91,6 +98,7 @@
   }
 
   window.renderMainBody3 = mountBody3;
+  window.renderSiteFooter = mountBody3;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', mountBody3);

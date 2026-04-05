@@ -1,5 +1,8 @@
 (function () {
   const BODY2_CSS_PATH = '/css/main/body2.css';
+  const MOVIE_DETAIL_JS_PATH = '/js/movie/movie_detail.js';
+
+  let movieDetailScriptPromise = null;
 
   function ensureBody2Css() {
     const exists = document.querySelector(`link[href="${BODY2_CSS_PATH}"]`);
@@ -32,36 +35,13 @@
     return mount;
   }
 
-  function extractFileName(path) {
-    if (!path) return '';
-    const normalized = String(path).replaceAll('\\', '/');
-    const parts = normalized.split('/');
-    return parts[parts.length - 1] || '';
-  }
-
-  function normalizeImageUrl(url) {
-    if (!url) return '';
-
-    const value = String(url).trim();
-    if (!value) return '';
-
-    if (value.startsWith('http://') || value.startsWith('https://')) {
-      return value;
-    }
-
-    if (value.startsWith('/')) {
-      return value;
-    }
-
-    if (value.includes('/mnt/hgfs/')) {
-      return `/images/${extractFileName(value)}`;
-    }
-
-    return `/${value}`;
-  }
 
   function resolvePosterUrl(movie) {
-    return normalizeImageUrl(movie.poster_url || '');
+    if (typeof window.resolveImageUrl === 'function') {
+      return window.resolveImageUrl(movie.poster_url || '');
+    }
+
+    return String(movie.poster_url || '').trim();
   }
 
   function escapeHtml(value) {
@@ -100,9 +80,87 @@
     `;
   }
 
-  function goToMovieDetail(movieId) {
+  async function ensureMovieDetailScript() {
+    if (typeof window.renderMovieDetail === 'function') return;
+
+    if (movieDetailScriptPromise) {
+      await movieDetailScriptPromise;
+      return;
+    }
+
+    movieDetailScriptPromise = new Promise((resolve, reject) => {
+      if (typeof window.renderMovieDetail === 'function') {
+        resolve();
+        return;
+      }
+
+      const existing = document.querySelector(`script[src="${MOVIE_DETAIL_JS_PATH}"]`);
+
+      if (existing) {
+        const onLoad = function () {
+          existing.removeEventListener('load', onLoad);
+          existing.removeEventListener('error', onError);
+          resolve();
+        };
+
+        const onError = function () {
+          existing.removeEventListener('load', onLoad);
+          existing.removeEventListener('error', onError);
+          movieDetailScriptPromise = null;
+          reject(new Error('movie_detail.js 로드 실패'));
+        };
+
+        existing.addEventListener('load', onLoad);
+        existing.addEventListener('error', onError);
+
+        if (typeof window.renderMovieDetail === 'function') {
+          resolve();
+        }
+
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = MOVIE_DETAIL_JS_PATH;
+      script.async = true;
+
+      script.onload = function () {
+        resolve();
+      };
+
+      script.onerror = function () {
+        movieDetailScriptPromise = null;
+        reject(new Error('movie_detail.js 로드 실패'));
+      };
+
+      document.body.appendChild(script);
+    });
+
+    await movieDetailScriptPromise;
+  }
+
+  async function goToMovieDetail(movieId) {
     if (!movieId) return;
-    window.location.href = `/movie/detail.html?movie_id=${movieId}`;
+
+    const url = new URL('/movie/detail.html', window.location.origin);
+    url.searchParams.set('movie_id', String(movieId));
+
+    window.history.pushState(
+      {
+        route: 'detail',
+        movie_id: movieId
+      },
+      '',
+      `${url.pathname}${url.search}`
+    );
+
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+
+    await ensureMovieDetailScript();
+
+    if (typeof window.renderMovieDetail === 'function') {
+      await window.renderMovieDetail();
+    }
   }
 
   async function loadRankedMovies() {
@@ -121,7 +179,14 @@
 
     const article = document.createElement('article');
     article.className = 'main-body2-card';
-    article.addEventListener('click', () => goToMovieDetail(movie.movie_id));
+    article.addEventListener('click', async () => {
+      try {
+        await goToMovieDetail(movie.movie_id);
+      } catch (error) {
+        console.error(error);
+        alert('영화 상세정보를 불러오지 못했습니다.');
+      }
+    });
 
     article.innerHTML = `
       <div class="main-body2-poster-wrap">

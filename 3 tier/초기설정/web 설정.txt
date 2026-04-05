@@ -1,0 +1,89 @@
+1. 기본설정
+vi /etc/selinux/config
+SELINUX=disabled
+
+nmcli connection modify ens160 ipv4.addresses 192.168.10.21/24
+nmcli connection up ens160
+
+2. 패키지 설치
+dnf install -y nginx open-vm-tools open-vm-tools-desktop fuse
+systemctl enable --now nginx
+systemctl enable --now vmtoolsd
+
+3. vm 쉐어 마운트
+mkdir -p /mnt/hgfs/ticketing-web
+vmhgfs-fuse .host:/ticketing-web /mnt/hgfs/ticketing-web -o allow_other
+
+cat >> /etc/fstab <<'EOF'
+.host:/ticketing-web /mnt/hgfs/ticketing-web fuse.vmhgfs-fuse allow_other,defaults 0 0
+EOF
+
+systemctl daemon-reload
+mount -a
+
+4. nginx 설정
+cat > /etc/nginx/conf.d/ticketing.conf <<'EOF'
+server {
+    listen 80;
+    server_name _;
+
+    root /mnt/hgfs/ticketing-web;
+    index index.html;
+
+    location /js/ {
+        try_files $uri @js_not_found;
+    }
+
+    location @js_not_found {
+        default_type text/plain;
+        return 404 "JS file not found: $uri\n";
+    }
+
+    location /css/ {
+        try_files $uri =404;
+    }
+
+    location /images/ {
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/read/ {
+        proxy_pass http://192.168.10.22:5000/api/read/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api/write/ {
+        proxy_pass http://192.168.10.22:5001/api/write/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+EOF
+
+5. 최종 확인
+nginx -t
+systemctl restart nginx
+
+
+
+6. cloud flase 배포 설치
+
+curl -fsSL https://pkg.cloudflare.com/cloudflared.repo | tee /etc/yum.repos.d/cloudflared.repo
+dnf clean all
+dnf makecache
+dnf install -y cloudflared
+
+7. curl -I http://localhost:80 확인
+cloudflared tunnel --url http://localhost:80
+
+8. nginx 중복 확인
+curl -s http://127.0.0.1 | head -5
+echo
+curl -s -H 'Host: delegation-graham-tabs-texts.trycloudflare.com' http://127.0.0.1 | head -5
+echo
+nginx -T | grep -nE 'listen|server_name|root'
