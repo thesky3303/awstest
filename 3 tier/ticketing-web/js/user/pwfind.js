@@ -3,87 +3,30 @@
   const PWFIND_CSS_PATH = '/css/user/pwfind.css';
   const FIND_PASSWORD_API = '/api/read/auth/find-password';
   const RESET_PASSWORD_API = '/api/write/auth/reset-password';
+  const runtime = window.APP_RUNTIME || {};
 
-  let savedScrollY = 0;
-
-  function ensureCss(href) {
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`link[href="${href}"]`);
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-          return;
-        }
-
-        existing.addEventListener(
-          'load',
-          () => {
-            existing.dataset.loaded = 'true';
-            resolve();
-          },
-          { once: true }
-        );
-        existing.addEventListener('error', reject, { once: true });
-        return;
-      }
-
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = href;
-
-      link.addEventListener(
-        'load',
-        () => {
-          link.dataset.loaded = 'true';
-          resolve();
-        },
-        { once: true }
-      );
-      link.addEventListener('error', reject, { once: true });
-
-      document.head.appendChild(link);
-    });
-  }
-
-  function lockBodyScroll() {
-    savedScrollY = window.scrollY || window.pageYOffset || 0;
-    document.body.classList.add('login-modal-open');
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${savedScrollY}px`;
-    document.body.style.left = '0';
-    document.body.style.right = '0';
-    document.body.style.width = '100%';
-  }
-
-  function unlockBodyScroll() {
-    document.body.classList.remove('login-modal-open');
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.left = '';
-    document.body.style.right = '';
-    document.body.style.width = '';
-    window.scrollTo(0, savedScrollY);
-  }
-
-  function removeExistingModal() {
-    const existing = document.getElementById('login-modal-overlay');
-    if (existing) existing.remove();
+  function ensureModalCss() {
+    return Promise.all([
+      runtime.ensureStyle(LOGIN_CSS_PATH),
+      runtime.ensureStyle(PWFIND_CSS_PATH)
+    ]);
   }
 
   function closePwFindPage() {
-    const overlay = document.getElementById('login-modal-overlay');
-    if (overlay) overlay.remove();
-    unlockBodyScroll();
+    if (runtime.removeNodeById) {
+      runtime.removeNodeById('login-modal-overlay');
+    }
+    if (runtime.unlockBodyScroll) {
+      runtime.unlockBodyScroll();
+    }
   }
 
   function goToLoginPage() {
     closePwFindPage();
-
     if (typeof window.openLoginPage === 'function') {
       window.openLoginPage();
       return true;
     }
-
     alert('로그인 화면을 불러오지 못했습니다.');
     return false;
   }
@@ -99,12 +42,10 @@
   }
 
   function clearErrors(modal) {
-    modal.querySelectorAll('.pwfind-field-error').forEach(node => {
+    modal.querySelectorAll('.pwfind-field-error').forEach((node) => {
       node.textContent = '';
     });
-
-    const common = modal.querySelector('.pwfind-common-error');
-    if (common) common.textContent = '';
+    setCommonError(modal, '');
   }
 
   function onlyDigits(value) {
@@ -116,7 +57,7 @@
   }
 
   function isValidPhone(phone) {
-    return /^01[016789]\d{7,8}$/.test(phone);
+    return /^01[016789]\d{7,8}$/.test(String(phone || '').trim());
   }
 
   function isValidName(name) {
@@ -130,7 +71,6 @@
   function formatJoinDate(value) {
     if (!value) return '';
     const date = new Date(value);
-
     if (Number.isNaN(date.getTime())) {
       return String(value).slice(0, 10).replaceAll('-', '.');
     }
@@ -141,39 +81,59 @@
     return `${y}.${m}.${d}`;
   }
 
-  async function postJson(url, payload) {
-    let response;
-
+  async function requestFindUser(phone, name) {
     try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      return await runtime.postJson(FIND_PASSWORD_API, { phone, name });
     } catch (error) {
       return {
         success: false,
-        networkError: true,
-        message: '서버에 연결할 수 없습니다.'
+        message: error.message || '서버에 연결할 수 없습니다.'
       };
     }
+  }
 
-    let data = {};
+  async function requestResetPassword(phone, name, password) {
     try {
-      data = await response.json();
+      return await runtime.postJson(RESET_PASSWORD_API, { phone, name, password });
     } catch (error) {
-      data = {};
-    }
-
-    if (!response.ok) {
       return {
         success: false,
-        status: response.status,
-        message: data.message || `서버 오류 (${response.status})`
+        message: error.message || '서버에 연결할 수 없습니다.'
       };
     }
+  }
 
-    return data;
+  function normalizeFindResult(result, phone, name) {
+    const user = result.user || result.data || result.result || null;
+    const matchedPhone =
+      result.matched_phone === true ||
+      result.phone_match === true ||
+      result.phoneMatched === true ||
+      result.is_phone_match === true ||
+      (user && String(user.phone || '') === String(phone));
+
+    const matchedName =
+      result.matched_name === true ||
+      result.name_match === true ||
+      result.nameMatched === true ||
+      result.is_name_match === true ||
+      (user && String(user.name || '').trim() === String(name).trim());
+
+    const success =
+      result.success === true ||
+      result.exists === true ||
+      result.found === true ||
+      result.matched === true ||
+      result.both_matched === true ||
+      !!user;
+
+    return {
+      success,
+      matchedPhone,
+      matchedName,
+      user: success ? (user || { phone, name }) : null,
+      message: result.message || ''
+    };
   }
 
   function buildVerifyHtml() {
@@ -192,25 +152,12 @@
 
         <form class="pwfind-form pwfind-verify-form" novalidate>
           <div class="pwfind-form-group">
-            <input
-              type="text"
-              name="phone"
-              class="login-input pwfind-input"
-              placeholder="핸드폰번호"
-              inputmode="numeric"
-              maxlength="11"
-            />
+            <input type="text" name="phone" class="login-input pwfind-input" placeholder="핸드폰번호" inputmode="numeric" maxlength="11" />
             <div class="pwfind-field-error" data-error-for="phone"></div>
           </div>
 
           <div class="pwfind-form-group">
-            <input
-              type="text"
-              name="name"
-              class="login-input pwfind-input"
-              placeholder="이름"
-              maxlength="20"
-            />
+            <input type="text" name="name" class="login-input pwfind-input" placeholder="이름" maxlength="20" />
             <div class="pwfind-field-error" data-error-for="name"></div>
           </div>
 
@@ -251,22 +198,12 @@
           <input type="hidden" name="name" value="${user.name || ''}">
 
           <div class="pwfind-form-group">
-            <input
-              type="password"
-              name="password"
-              class="login-input pwfind-input"
-              placeholder="비밀번호 변경"
-            />
+            <input type="password" name="password" class="login-input pwfind-input" placeholder="비밀번호 변경" />
             <div class="pwfind-field-error" data-error-for="password"></div>
           </div>
 
           <div class="pwfind-form-group">
-            <input
-              type="password"
-              name="password_confirm"
-              class="login-input pwfind-input"
-              placeholder="비밀번호 확인"
-            />
+            <input type="password" name="password_confirm" class="login-input pwfind-input" placeholder="비밀번호 확인" />
             <div class="pwfind-field-error" data-error-for="password_confirm"></div>
           </div>
 
@@ -283,56 +220,6 @@
     return overlay;
   }
 
-  async function requestFindUser(phone, name) {
-    return await postJson(FIND_PASSWORD_API, { phone, name });
-  }
-
-  async function requestResetPassword(phone, name, password) {
-    return await postJson(RESET_PASSWORD_API, {
-      phone,
-      name,
-      password
-    });
-  }
-
-  function normalizeFindResult(result, phone, name) {
-    const user = result.user || result.data || result.result || null;
-
-    const matchedPhone =
-      result.matched_phone === true ||
-      result.phone_match === true ||
-      result.phoneMatched === true ||
-      result.is_phone_match === true ||
-      (user && String(user.phone || '') === String(phone));
-
-    const matchedName =
-      result.matched_name === true ||
-      result.name_match === true ||
-      result.nameMatched === true ||
-      result.is_name_match === true ||
-      (user && String(user.name || '').trim() === String(name).trim());
-
-    const success =
-      result.success === true ||
-      result.exists === true ||
-      result.found === true ||
-      result.matched === true ||
-      result.both_matched === true ||
-      (matchedPhone && matchedName) ||
-      !!user;
-
-    return {
-      success,
-      matchedPhone,
-      matchedName,
-      user: user || {
-        phone,
-        name,
-        created_at: result.created_at || result.join_date || ''
-      }
-    };
-  }
-
   function bindVerifyEvents(overlay) {
     const closeButton = overlay.querySelector('.login-modal-close');
     const cancelButton = overlay.querySelector('.pwfind-cancel-button');
@@ -340,23 +227,21 @@
     const phoneInput = form.querySelector('input[name="phone"]');
     const nameInput = form.querySelector('input[name="name"]');
     const submitButton = form.querySelector('.pwfind-submit-button');
-
+    let isSubmitting = false;
     let isComposingName = false;
 
-    closeButton.addEventListener('click', function (e) {
-      e.preventDefault();
-      closePwFindPage();
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) {
+        closePwFindPage();
+      }
     });
 
-    cancelButton.addEventListener('click', function (e) {
-      e.preventDefault();
-      goToLoginPage();
-    });
+    closeButton.addEventListener('click', closePwFindPage);
+    cancelButton.addEventListener('click', goToLoginPage);
 
     phoneInput.addEventListener('input', function () {
       phoneInput.value = onlyDigits(phoneInput.value).slice(0, 11);
-      setFieldError(overlay, 'phone', '');
-      setCommonError(overlay, '');
+      clearErrors(overlay);
     });
 
     nameInput.addEventListener('compositionstart', function () {
@@ -365,92 +250,58 @@
 
     nameInput.addEventListener('compositionend', function () {
       isComposingName = false;
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
-      setFieldError(overlay, 'name', '');
-      setCommonError(overlay, '');
+      nameInput.value = sanitizeName(nameInput.value);
     });
 
     nameInput.addEventListener('input', function () {
-      if (isComposingName) return;
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
-      setFieldError(overlay, 'name', '');
-      setCommonError(overlay, '');
-    });
-
-    nameInput.addEventListener('blur', function () {
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
-      const name = nameInput.value.trim();
-      if (!name) return;
-
-      if (!isValidName(name)) {
-        setFieldError(overlay, 'name', '이름을 확인하세요.');
-      } else {
-        setFieldError(overlay, 'name', '');
+      if (!isComposingName) {
+        nameInput.value = sanitizeName(nameInput.value);
       }
+      clearErrors(overlay);
     });
 
-    form.addEventListener('submit', async function (e) {
-      e.preventDefault();
-      clearErrors(overlay);
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      if (isSubmitting) return;
 
-      phoneInput.value = onlyDigits(phoneInput.value).slice(0, 11);
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
+      clearErrors(overlay);
 
       const phone = phoneInput.value.trim();
       const name = nameInput.value.trim();
-
       let hasError = false;
 
       if (!isValidPhone(phone)) {
         setFieldError(overlay, 'phone', '핸드폰번호를 확인하세요.');
         hasError = true;
       }
-
       if (!isValidName(name)) {
         setFieldError(overlay, 'name', '이름을 확인하세요.');
         hasError = true;
       }
-
       if (hasError) return;
 
+      isSubmitting = true;
       submitButton.disabled = true;
       submitButton.textContent = '확인 중...';
 
       try {
-        const rawResult = await requestFindUser(phone, name);
-        const result = normalizeFindResult(rawResult, phone, name);
-
-        if (!result.matchedPhone && result.matchedName) {
-          setFieldError(overlay, 'phone', '핸드폰번호를 확인하세요.');
-          submitButton.disabled = false;
-          submitButton.textContent = '확인';
+        const result = normalizeFindResult(await requestFindUser(phone, name), phone, name);
+        if (!result.success || !result.user) {
+          if (!result.matchedPhone) {
+            setFieldError(overlay, 'phone', '가입된 핸드폰번호가 없습니다.');
+          }
+          if (!result.matchedName) {
+            setFieldError(overlay, 'name', '가입된 이름이 없습니다.');
+          }
+          if (result.matchedPhone && result.matchedName) {
+            setCommonError(overlay, result.message || '가입 정보를 찾을 수 없습니다.');
+          }
           return;
         }
 
-        if (result.matchedPhone && !result.matchedName) {
-          setFieldError(overlay, 'name', '이름을 확인하세요.');
-          submitButton.disabled = false;
-          submitButton.textContent = '확인';
-          return;
-        }
-
-        if (!result.success) {
-          setFieldError(overlay, 'phone', '핸드폰번호를 확인하세요.');
-          setFieldError(overlay, 'name', '이름을 확인하세요.');
-          submitButton.disabled = false;
-          submitButton.textContent = '확인';
-          return;
-        }
-
-        closePwFindPage();
-        openPwFindResetPage({
-          phone: result.user.phone || phone,
-          name: result.user.name || name,
-          created_at: result.user.created_at || rawResult.created_at || ''
-        });
-      } catch (error) {
-        console.error('pwfind verify error:', error);
-        setCommonError(overlay, '서버와 통신 중 문제가 발생했습니다.');
+        openPwResetPage(result.user);
+      } finally {
+        isSubmitting = false;
         submitButton.disabled = false;
         submitButton.textContent = '확인';
       }
@@ -461,94 +312,90 @@
     const closeButton = overlay.querySelector('.login-modal-close');
     const cancelButton = overlay.querySelector('.pwfind-cancel-button');
     const form = overlay.querySelector('.pwfind-reset-form');
-    const phoneInput = form.querySelector('input[name="phone"]');
-    const nameInput = form.querySelector('input[name="name"]');
     const passwordInput = form.querySelector('input[name="password"]');
     const passwordConfirmInput = form.querySelector('input[name="password_confirm"]');
     const submitButton = form.querySelector('.pwfind-submit-button');
+    let isSubmitting = false;
 
-    closeButton.addEventListener('click', function (e) {
-      e.preventDefault();
-      closePwFindPage();
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) {
+        closePwFindPage();
+      }
     });
 
-    cancelButton.addEventListener('click', function (e) {
-      e.preventDefault();
-      goToLoginPage();
+    closeButton.addEventListener('click', closePwFindPage);
+    cancelButton.addEventListener('click', goToLoginPage);
+
+    [passwordInput, passwordConfirmInput].forEach((input) => {
+      input.addEventListener('input', function () {
+        clearErrors(overlay);
+      });
     });
 
-    passwordInput.addEventListener('input', function () {
-      setFieldError(overlay, 'password', '');
-      setCommonError(overlay, '');
-    });
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      if (isSubmitting) return;
 
-    passwordConfirmInput.addEventListener('input', function () {
-      setFieldError(overlay, 'password_confirm', '');
-      setCommonError(overlay, '');
-    });
-
-    form.addEventListener('submit', async function (e) {
-      e.preventDefault();
       clearErrors(overlay);
 
+      const phone = form.querySelector('input[name="phone"]').value.trim();
+      const name = form.querySelector('input[name="name"]').value.trim();
       const password = passwordInput.value;
       const passwordConfirm = passwordConfirmInput.value;
-
       let hasError = false;
 
       if (!isValidPassword(password)) {
-        setFieldError(overlay, 'password', '비밀번호는 최소 4자리입니다.');
+        setFieldError(overlay, 'password', '비밀번호는 4자 이상 입력하세요.');
         hasError = true;
       }
-
       if (password !== passwordConfirm) {
         setFieldError(overlay, 'password_confirm', '비밀번호가 일치하지 않습니다.');
         hasError = true;
       }
-
       if (hasError) return;
 
+      isSubmitting = true;
       submitButton.disabled = true;
       submitButton.textContent = '변경 중...';
 
       try {
-        const result = await requestResetPassword(
-          phoneInput.value.trim(),
-          nameInput.value.trim(),
-          password
-        );
-
-        const success =
-          result.success === true ||
-          result.updated === true ||
-          result.changed === true ||
-          result.message === 'password reset success';
-
-        if (!success) {
+        const result = await requestResetPassword(phone, name, password);
+        if (result.success === false) {
           setCommonError(overlay, result.message || '비밀번호 변경에 실패했습니다.');
-          submitButton.disabled = false;
-          submitButton.textContent = '확인';
           return;
         }
 
-        submitButton.disabled = false;
-        submitButton.textContent = '확인';
-
         alert('비밀번호가 변경되었습니다.');
         goToLoginPage();
-      } catch (error) {
-        console.error('pwfind reset error:', error);
-        setCommonError(overlay, '서버와 통신 중 문제가 발생했습니다.');
+      } finally {
+        isSubmitting = false;
         submitButton.disabled = false;
         submitButton.textContent = '확인';
       }
     });
   }
 
-  function openPwFindVerifyPage() {
-    removeExistingModal();
+  function openPwResetPage(user) {
+    closePwFindPage();
+    const overlay = buildResetHtml(user);
+    runtime.lockBodyScroll();
+    document.body.appendChild(overlay);
+    bindResetEvents(overlay);
+  }
+
+  async function openPwFindPage() {
+    if (runtime.clearTransientUi) {
+      runtime.clearTransientUi();
+    }
+
+    try {
+      await ensureModalCss();
+    } catch (error) {
+      console.error('[pwfind] css load error:', error);
+    }
+
     const overlay = buildVerifyHtml();
-    lockBodyScroll();
+    runtime.lockBodyScroll();
     document.body.appendChild(overlay);
     bindVerifyEvents(overlay);
 
@@ -558,30 +405,6 @@
     }
   }
 
-  function openPwFindResetPage(user) {
-    removeExistingModal();
-    const overlay = buildResetHtml(user);
-    lockBodyScroll();
-    document.body.appendChild(overlay);
-    bindResetEvents(overlay);
-
-    const firstInput = overlay.querySelector('input[name="password"]');
-    if (firstInput) {
-      requestAnimationFrame(() => firstInput.focus());
-    }
-  }
-
-  async function openPwFindPage() {
-    removeExistingModal();
-
-    try {
-      await Promise.all([ensureCss(LOGIN_CSS_PATH), ensureCss(PWFIND_CSS_PATH)]);
-    } catch (error) {
-      console.error('pwfind css load error:', error);
-    }
-
-    openPwFindVerifyPage();
-  }
-
   window.openPwFindPage = openPwFindPage;
+  window.closePwFindPage = closePwFindPage;
 })();

@@ -114,7 +114,8 @@ cd /mnt/hgfs/ticketing-was
 PYTHONPATH=/mnt/hgfs/ticketing-was /root/ticketing-was/venv/bin/python /mnt/hgfs/ticketing-was/movie/movie_cache_builder.py
 
 
-cat > /usr/local/bin/ticketing_movie_cache_boot_warm.sh <<'EOF'
+vi /usr/local/bin/ticketing_movie_cache_boot_warm.sh
+
 #!/bin/bash
 set -u
 
@@ -148,7 +149,7 @@ if [ "$success" -eq 1 ]; then
 fi
 
 exit 1
-EOF
+
 
 chmod +x /usr/local/bin/ticketing_movie_cache_boot_warm.sh
 

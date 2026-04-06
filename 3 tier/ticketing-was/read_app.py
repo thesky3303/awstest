@@ -3,7 +3,8 @@ from flask_cors import CORS
 from config import READ_API_HOST, READ_API_PORT
 
 from user.user_read import user_read_bp
-from movie.movie_read import movie_read_bp, rebuild_movie_cache
+from movie.movie_read import movie_read_bp
+from movie.movie_cache_builder import rebuild_movie_cache
 from auth.auth_user_read import auth_user_read_bp
 
 READ_BLUEPRINTS = [

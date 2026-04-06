@@ -1,33 +1,21 @@
 (function () {
   const BODY_JS_PATH = '/js/main/body.js';
   const BODY2_JS_PATH = '/js/main/body2.js';
-
-  function ensureMainBody() {
-    let mainBody = document.getElementById('main-body');
-
-    if (!mainBody) {
-      mainBody = document.createElement('div');
-      mainBody.id = 'main-body';
-      document.body.appendChild(mainBody);
-    }
-
-    mainBody.innerHTML = '';
-    mainBody.style.display = '';
-    return mainBody;
-  }
-
-  function removeSection(id) {
-    const node = document.getElementById(id);
-    if (node) node.remove();
-  }
+  const NEXT_ROUTE_PREFETCH = ['/js/movie/movie_main.js'];
+  const runtime = window.APP_RUNTIME || {};
 
   async function renderHomePage() {
-    ensureMainBody();
-    removeSection('main-body2');
+    if (runtime.resetPrimarySections) {
+      runtime.resetPrimarySections();
+    }
 
     if (typeof window.appEnsureScript === 'function') {
       await window.appEnsureScript(BODY_JS_PATH);
       await window.appEnsureScript(BODY2_JS_PATH);
+    }
+
+    if (typeof window.appPrefetchScripts === 'function') {
+      window.appPrefetchScripts(NEXT_ROUTE_PREFETCH);
     }
 
     if (typeof window.renderMainBody === 'function') {

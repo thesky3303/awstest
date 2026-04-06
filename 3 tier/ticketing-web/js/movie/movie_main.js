@@ -6,16 +6,25 @@
   let currentKeyword = '';
 
   function ensureMovieMainCss() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureStyle === 'function') {
+      return window.APP_RUNTIME.ensureStyle(MOVIE_MAIN_CSS_PATH);
+    }
+
     const exists = document.querySelector(`link[href="${MOVIE_MAIN_CSS_PATH}"]`);
-    if (exists) return;
+    if (exists) return Promise.resolve(exists);
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = MOVIE_MAIN_CSS_PATH;
     document.head.appendChild(link);
+    return Promise.resolve(link);
   }
 
   function ensureMountPoint() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureMainBody === 'function') {
+      return window.APP_RUNTIME.ensureMainBody();
+    }
+
     let mount = document.getElementById('main-body');
 
     if (!mount) {
@@ -33,6 +42,11 @@
   }
 
   function clearMainPageSections() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.resetPrimarySections === 'function') {
+      window.APP_RUNTIME.resetPrimarySections();
+      return;
+    }
+
     const mainBody = ensureMountPoint();
     mainBody.innerHTML = '';
     mainBody.style.display = '';
@@ -314,7 +328,11 @@
   }
 
   async function mountMovieMain() {
-    ensureMovieMainCss();
+    await ensureMovieMainCss();
+
+    if (typeof window.appPrefetchScripts === 'function') {
+      window.appPrefetchScripts(['/js/movie/movie_detail.js']);
+    }
     clearMainPageSections();
 
     const mount = ensureMountPoint();

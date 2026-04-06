@@ -4,14 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sol cinema</title>
+    <link rel="icon" href="data:," />
 
-    <script src="/js/common/read-api.js"></script>
-    <script src="/js/common/write-api.js"></script>
-    <script src="/js/common/app-config.js"></script>
-    <script src="/js/common/image-resolver.js"></script>
-    <script src="/js/main/head.js"></script>
-    <script src="/js/user/login.js"></script>
-    <script src="/js/main/router.js"></script>
+    <script defer src="/js/common/read-api.js"></script>
+    <script defer src="/js/common/write-api.js"></script>
+    <script defer src="/js/common/app-config.js"></script>
+    <script defer src="/js/common/image-resolver.js"></script>
+    <script defer src="/js/main/head.js"></script>
+    <script defer src="/js/user/login.js"></script>
+    <script defer src="/js/main/router.js"></script>
   </head>
 
   <body>
@@ -23,11 +24,11 @@
     </div>
 
     <script>
-      (function () {
+      document.addEventListener('DOMContentLoaded', function () {
         const button = document.getElementById('flush-redis-btn');
         if (!button) return;
 
-        button.addEventListener('click', async () => {
+        button.addEventListener('click', async function () {
           try {
             const data = await writeApi('/admin/cache/rebuild-all');
             console.log('cache rebuild result:', data);
@@ -37,7 +38,7 @@
             alert(error.message || 'Redis 초기화 중 오류가 발생했습니다.');
           }
         });
-      })();
+      });
     </script>
   </body>
 </html>

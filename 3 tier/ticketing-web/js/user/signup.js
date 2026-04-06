@@ -1,91 +1,32 @@
 (function () {
   const LOGIN_CSS_PATH = '/css/user/login.css';
   const SIGNUP_CSS_PATH = '/css/user/signup.css';
-
   const CHECK_PHONE_API = '/api/read/auth/check-phone';
   const SIGNUP_API = '/api/write/auth/signup';
+  const runtime = window.APP_RUNTIME || {};
 
-  let savedScrollY = 0;
-
-  function ensureCss(href) {
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`link[href="${href}"]`);
-
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-          return;
-        }
-
-        existing.addEventListener(
-          'load',
-          () => {
-            existing.dataset.loaded = 'true';
-            resolve();
-          },
-          { once: true }
-        );
-        existing.addEventListener('error', reject, { once: true });
-        return;
-      }
-
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = href;
-
-      link.addEventListener(
-        'load',
-        () => {
-          link.dataset.loaded = 'true';
-          resolve();
-        },
-        { once: true }
-      );
-      link.addEventListener('error', reject, { once: true });
-
-      document.head.appendChild(link);
-    });
-  }
-
-  function lockBodyScroll() {
-    savedScrollY = window.scrollY || window.pageYOffset || 0;
-    document.body.classList.add('login-modal-open');
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${savedScrollY}px`;
-    document.body.style.left = '0';
-    document.body.style.right = '0';
-    document.body.style.width = '100%';
-  }
-
-  function unlockBodyScroll() {
-    document.body.classList.remove('login-modal-open');
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.left = '';
-    document.body.style.right = '';
-    document.body.style.width = '';
-    window.scrollTo(0, savedScrollY);
-  }
-
-  function removeExistingModal() {
-    const existing = document.getElementById('login-modal-overlay');
-    if (existing) existing.remove();
+  function ensureModalCss() {
+    return Promise.all([
+      runtime.ensureStyle(LOGIN_CSS_PATH),
+      runtime.ensureStyle(SIGNUP_CSS_PATH)
+    ]);
   }
 
   function closeSignupPage() {
-    const overlay = document.getElementById('login-modal-overlay');
-    if (overlay) overlay.remove();
-    unlockBodyScroll();
+    if (runtime.removeNodeById) {
+      runtime.removeNodeById('login-modal-overlay');
+    }
+    if (runtime.unlockBodyScroll) {
+      runtime.unlockBodyScroll();
+    }
   }
 
   function goToLoginPage() {
     closeSignupPage();
-
     if (typeof window.openLoginPage === 'function') {
       window.openLoginPage();
       return true;
     }
-
     alert('로그인 화면을 불러오지 못했습니다.');
     return false;
   }
@@ -101,12 +42,10 @@
   }
 
   function clearErrors(modal) {
-    modal.querySelectorAll('.signup-field-error').forEach(node => {
+    modal.querySelectorAll('.signup-field-error').forEach((node) => {
       node.textContent = '';
     });
-
-    const commonError = modal.querySelector('.signup-common-error');
-    if (commonError) commonError.textContent = '';
+    setCommonError(modal, '');
   }
 
   function onlyDigits(value) {
@@ -129,39 +68,40 @@
     return String(password || '').trim().length >= 4;
   }
 
-  async function postJson(url, payload) {
-    let response;
-
+  async function requestPhoneDuplicate(phone) {
     try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-    } catch (networkError) {
+      const result = await runtime.postJson(CHECK_PHONE_API, { phone });
+      const duplicated =
+        result.duplicated === true ||
+        result.duplicate === true ||
+        result.exists === true ||
+        result.found === true ||
+        Number(result.count || 0) > 0;
+
+      return {
+        success: result.success !== false,
+        duplicated,
+        message: result.message || ''
+      };
+    } catch (error) {
       return {
         success: false,
-        networkError: true,
-        message: '서버에 연결할 수 없습니다.'
+        duplicated: false,
+        message: error.message || '서버에 연결할 수 없습니다.'
       };
     }
+  }
 
-    let data = {};
+  async function requestSignup(phone, password, name) {
     try {
-      data = await response.json();
-    } catch (parseError) {
-      data = {};
-    }
-
-    if (!response.ok) {
+      return await runtime.postJson(SIGNUP_API, { phone, password, name });
+    } catch (error) {
       return {
         success: false,
-        status: response.status,
-        message: data.message || `서버 오류 (${response.status})`
+        status: error.status,
+        message: error.message || '서버 오류가 발생했습니다.'
       };
     }
-
-    return data;
   }
 
   function buildSignupHtml() {
@@ -180,36 +120,17 @@
 
         <form class="signup-form" novalidate>
           <div class="signup-form-group">
-            <input
-              type="text"
-              name="phone"
-              class="login-input signup-input"
-              placeholder="핸드폰번호"
-              inputmode="numeric"
-              maxlength="11"
-            />
+            <input type="text" name="phone" class="login-input signup-input" placeholder="핸드폰번호" inputmode="numeric" maxlength="11" />
             <div class="signup-field-error" data-error-for="phone"></div>
           </div>
 
           <div class="signup-form-group">
-            <input
-              type="password"
-              name="password"
-              class="login-input signup-input"
-              placeholder="비밀번호"
-              autocomplete="new-password"
-            />
+            <input type="password" name="password" class="login-input signup-input" placeholder="비밀번호" autocomplete="new-password" />
             <div class="signup-field-error" data-error-for="password"></div>
           </div>
 
           <div class="signup-form-group">
-            <input
-              type="text"
-              name="name"
-              class="login-input signup-input"
-              placeholder="이름"
-              maxlength="20"
-            />
+            <input type="text" name="name" class="login-input signup-input" placeholder="이름" maxlength="20" />
             <div class="signup-field-error" data-error-for="name"></div>
           </div>
 
@@ -226,40 +147,6 @@
     return overlay;
   }
 
-  async function requestPhoneDuplicate(phone) {
-    const result = await postJson(CHECK_PHONE_API, { phone });
-
-    if (result.networkError) {
-      return {
-        success: false,
-        networkError: true,
-        duplicated: false,
-        message: result.message
-      };
-    }
-
-    const duplicated =
-      result.duplicated === true ||
-      result.duplicate === true ||
-      result.exists === true ||
-      result.found === true ||
-      Number(result.count || 0) > 0;
-
-    return {
-      success: result.success !== false,
-      duplicated,
-      message: result.message || ''
-    };
-  }
-
-  async function requestSignup(phone, password, name) {
-    return await postJson(SIGNUP_API, {
-      phone,
-      password,
-      name
-    });
-  }
-
   function bindEvents(overlay) {
     const closeButton = overlay.querySelector('.login-modal-close');
     const cancelButton = overlay.querySelector('.signup-cancel-button');
@@ -268,47 +155,40 @@
     const passwordInput = form.querySelector('input[name="password"]');
     const nameInput = form.querySelector('input[name="name"]');
     const submitButton = form.querySelector('.signup-submit-button');
-
     let isComposingName = false;
+    let isSubmitting = false;
 
     async function validatePhoneDuplicate() {
       const phone = phoneInput.value.trim();
-
       if (!phone) return '핸드폰번호를 입력하세요.';
       if (!isValidPhone(phone)) return '핸드폰번호를 확인하세요.';
 
       const result = await requestPhoneDuplicate(phone);
-
-      if (result.networkError) {
-        return result.message || '중복 확인 중 오류가 발생했습니다.';
+      if (!result.success) {
+        return result.message || '서버와 통신할 수 없습니다.';
       }
-
       if (result.duplicated) {
-        return '이미 가입된 핸드폰번호입니다.';
+        return '이미 사용 중인 핸드폰번호입니다.';
       }
-
       return '';
     }
 
-    closeButton.addEventListener('click', function (e) {
-      e.preventDefault();
-      closeSignupPage();
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) {
+        closeSignupPage();
+      }
     });
 
-    cancelButton.addEventListener('click', function (e) {
-      e.preventDefault();
-      goToLoginPage();
-    });
+    closeButton.addEventListener('click', closeSignupPage);
+    cancelButton.addEventListener('click', goToLoginPage);
 
     phoneInput.addEventListener('input', function () {
       phoneInput.value = onlyDigits(phoneInput.value).slice(0, 11);
-      setFieldError(overlay, 'phone', '');
-      setCommonError(overlay, '');
+      clearErrors(overlay);
     });
 
     passwordInput.addEventListener('input', function () {
-      setFieldError(overlay, 'password', '');
-      setCommonError(overlay, '');
+      clearErrors(overlay);
     });
 
     nameInput.addEventListener('compositionstart', function () {
@@ -317,82 +197,62 @@
 
     nameInput.addEventListener('compositionend', function () {
       isComposingName = false;
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
-      setFieldError(overlay, 'name', '');
-      setCommonError(overlay, '');
+      nameInput.value = sanitizeName(nameInput.value);
     });
 
     nameInput.addEventListener('input', function () {
-      if (isComposingName) return;
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
-      setFieldError(overlay, 'name', '');
-      setCommonError(overlay, '');
-    });
-
-    nameInput.addEventListener('blur', function () {
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
-      const name = nameInput.value.trim();
-      if (!name) return;
-
-      if (!isValidName(name)) {
-        setFieldError(overlay, 'name', '이름을 확인하세요.');
-      } else {
-        setFieldError(overlay, 'name', '');
+      if (!isComposingName) {
+        nameInput.value = sanitizeName(nameInput.value);
       }
+      clearErrors(overlay);
     });
 
-    form.addEventListener('submit', async function (e) {
-      e.preventDefault();
-      clearErrors(overlay);
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      if (isSubmitting) return;
 
-      phoneInput.value = onlyDigits(phoneInput.value).slice(0, 11);
-      nameInput.value = sanitizeName(nameInput.value).slice(0, 20);
+      clearErrors(overlay);
 
       const phone = phoneInput.value.trim();
       const password = passwordInput.value;
       const name = nameInput.value.trim();
 
       let hasError = false;
-
-      const phoneDuplicateError = await validatePhoneDuplicate();
-      if (phoneDuplicateError) {
-        setFieldError(overlay, 'phone', phoneDuplicateError);
+      if (!isValidPhone(phone)) {
+        setFieldError(overlay, 'phone', '핸드폰번호를 확인하세요.');
         hasError = true;
       }
-
       if (!isValidPassword(password)) {
-        setFieldError(overlay, 'password', '비밀번호는 최소 4자리입니다.');
+        setFieldError(overlay, 'password', '비밀번호는 4자 이상 입력하세요.');
         hasError = true;
       }
-
       if (!isValidName(name)) {
         setFieldError(overlay, 'name', '이름을 확인하세요.');
         hasError = true;
       }
-
       if (hasError) return;
 
+      const phoneError = await validatePhoneDuplicate();
+      if (phoneError) {
+        setFieldError(overlay, 'phone', phoneError);
+        return;
+      }
+
+      isSubmitting = true;
       submitButton.disabled = true;
       submitButton.textContent = '가입 중...';
 
       try {
         const result = await requestSignup(phone, password, name);
-
-        if (!result.success) {
+        if (result.success === false) {
           setCommonError(overlay, result.message || '회원가입에 실패했습니다.');
-          submitButton.disabled = false;
-          submitButton.textContent = '가입';
           return;
         }
 
-        submitButton.disabled = false;
-        submitButton.textContent = '가입';
-
         alert('회원가입이 완료되었습니다.');
         goToLoginPage();
-      } catch (error) {
-        console.error('signup error:', error);
-        setCommonError(overlay, `회원가입 처리 중 오류: ${error.message || '알 수 없는 오류'}`);
+      } finally {
+        isSubmitting = false;
         submitButton.disabled = false;
         submitButton.textContent = '가입';
       }
@@ -400,16 +260,18 @@
   }
 
   async function openSignupPage() {
-    removeExistingModal();
+    if (runtime.clearTransientUi) {
+      runtime.clearTransientUi();
+    }
 
     try {
-      await Promise.all([ensureCss(LOGIN_CSS_PATH), ensureCss(SIGNUP_CSS_PATH)]);
+      await ensureModalCss();
     } catch (error) {
-      console.error('signup css load error:', error);
+      console.error('[signup] css load error:', error);
     }
 
     const overlay = buildSignupHtml();
-    lockBodyScroll();
+    runtime.lockBodyScroll();
     document.body.appendChild(overlay);
     bindEvents(overlay);
 
@@ -420,4 +282,5 @@
   }
 
   window.openSignupPage = openSignupPage;
+  window.closeSignupPage = closeSignupPage;
 })();

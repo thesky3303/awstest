@@ -2,16 +2,25 @@
   const MOVIE_DETAIL_CSS_PATH = '/css/movie/movie_detail.css';
 
   function ensureMovieDetailCss() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureStyle === 'function') {
+      return window.APP_RUNTIME.ensureStyle(MOVIE_DETAIL_CSS_PATH);
+    }
+
     const exists = document.querySelector(`link[href="${MOVIE_DETAIL_CSS_PATH}"]`);
-    if (exists) return;
+    if (exists) return Promise.resolve(exists);
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = MOVIE_DETAIL_CSS_PATH;
     document.head.appendChild(link);
+    return Promise.resolve(link);
   }
 
   function ensureMountPoint() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureMainBody === 'function') {
+      return window.APP_RUNTIME.ensureMainBody();
+    }
+
     let mount = document.getElementById('main-body');
 
     if (!mount) {
@@ -29,6 +38,11 @@
   }
 
   function clearPageSections() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.resetPrimarySections === 'function') {
+      window.APP_RUNTIME.resetPrimarySections();
+      return;
+    }
+
     const mainBody = ensureMountPoint();
     mainBody.innerHTML = '';
     mainBody.style.display = '';
@@ -185,6 +199,29 @@
     }
 
     window.location.href = '/';
+  }
+
+  function openBookingPage(movieId) {
+    const route = { view: 'booking' };
+    const normalizedMovieId = Number(movieId);
+
+    if (Number.isFinite(normalizedMovieId) && normalizedMovieId > 0) {
+      route.movie_id = Math.trunc(normalizedMovieId);
+    }
+
+    if (typeof window.appNavigate === 'function') {
+      window.appNavigate(route);
+      return;
+    }
+
+    const url = new URL('/', window.location.origin);
+    url.searchParams.set('view', 'booking');
+
+    if (route.movie_id) {
+      url.searchParams.set('movie_id', String(route.movie_id));
+    }
+
+    window.location.href = `${url.pathname}${url.search}`;
   }
 
   function getMovieVideoUrl(movie) {
@@ -463,6 +500,15 @@
         openVideoModal(movie);
       });
     }
+
+    const bookingButton = mount.querySelector('.movie-detail-booking-button');
+    if (bookingButton) {
+      bookingButton.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openBookingPage(movie.movie_id);
+      });
+    }
   }
 
   async function mountMovieDetail() {
@@ -475,7 +521,7 @@
       return;
     }
 
-    ensureMovieDetailCss();
+    await ensureMovieDetailCss();
     clearPageSections();
     createVideoModal();
     renderLoading(mount);

@@ -1,0 +1,80 @@
+cat > /usr/local/bin/ticketing_cloudflared_tunnel.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_URL="http://localhost:80"
+URL_FILE="/mnt/hgfs/ticketing-web/url.txt"
+LOG_FILE="/var/log/ticketing-cloudflared.log"
+
+mkdir -p "$(dirname "$URL_FILE")"
+touch "$LOG_FILE"
+
+: > "$LOG_FILE"
+: > "$URL_FILE"
+
+CLOUDFLARED_BIN="$(command -v cloudflared || true)"
+if [ -z "$CLOUDFLARED_BIN" ]; then
+    echo "[$(date '+%F %T')] cloudflared 명령어를 찾지 못했습니다." >> "$LOG_FILE"
+    exit 1
+fi
+
+echo "[$(date '+%F %T')] cloudflared quick tunnel 시작" >> "$LOG_FILE"
+echo "[$(date '+%F %T')] target=${TARGET_URL}" >> "$LOG_FILE"
+
+"$CLOUDFLARED_BIN" tunnel --no-autoupdate --url "$TARGET_URL" >> "$LOG_FILE" 2>&1 &
+CF_PID=$!
+
+cleanup() {
+    if kill -0 "$CF_PID" 2>/dev/null; then
+        kill "$CF_PID" 2>/dev/null || true
+        wait "$CF_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+# URL 로그가 바로 안 뜨는 경우를 대비해 충분히 대기
+sleep 15
+
+FOUND_URL=""
+for _ in $(seq 1 60); do
+    FOUND_URL="$(grep -Eo 'https://[A-Za-z0-9.-]+\.trycloudflare\.com' "$LOG_FILE" | tail -n 1 || true)"
+    if [ -n "$FOUND_URL" ]; then
+        printf '%s\n' "$FOUND_URL" > "$URL_FILE"
+        chmod 644 "$URL_FILE"
+        echo "[$(date '+%F %T')] tunnel url saved: $FOUND_URL" >> "$LOG_FILE"
+        break
+    fi
+    sleep 2
+done
+
+if [ -z "$FOUND_URL" ]; then
+    echo "[$(date '+%F %T')] tunnel URL을 찾지 못했습니다." >> "$LOG_FILE"
+fi
+
+wait "$CF_PID"
+EOF
+
+chmod +x /usr/local/bin/ticketing_cloudflared_tunnel.sh
+
+cat > /etc/systemd/system/ticketing-cloudflared.service <<'EOF'
+[Unit]
+Description=Ticketing Cloudflared Quick Tunnel
+After=network-online.target nginx.service
+Wants=network-online.target nginx.service
+RequiresMountsFor=/mnt/hgfs/ticketing-web
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+ExecStart=/usr/local/bin/ticketing_cloudflared_tunnel.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now ticketing-cloudflared.service
+systemctl status ticketing-cloudflared.service --no-pager

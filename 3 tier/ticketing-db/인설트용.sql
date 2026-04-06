@@ -54,3 +54,81 @@ INSERT INTO movies VALUES
 (39, '더미데이터29', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터29', NULL, 'ACTIVE', 'N', NOW(), NOW()),
 (40, '더미데이터30', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터30', NULL, 'ACTIVE', 'N', NOW(), NOW());
 
+
+
+INSERT INTO theaters (theater_id, address, created_at, updated_at) VALUES
+(1, '서울', NOW(), NOW()),
+(2, '경기', NOW(), NOW()),
+(3, '인천', NOW(), NOW()),
+(4, '대전', NOW(), NOW()),
+(5, '부산', NOW(), NOW());
+
+INSERT INTO halls (theater_id, hall_name, total_seats, created_at, updated_at) VALUES
+(1, 'A', 30, NOW(), NOW()),
+(1, 'B', 30, NOW(), NOW()),
+(2, 'A', 30, NOW(), NOW()),
+(2, 'B', 30, NOW(), NOW()),
+(3, 'A', 30, NOW(), NOW());
+
+INSERT INTO hall_seats (hall_id, seat_row_no, seat_col_no, status, created_at) VALUES
+(1, 1, 1, 'ACTIVE', NOW()),
+(1, 1, 2, 'ACTIVE', NOW()),
+(1, 1, 3, 'ACTIVE', NOW()),
+(1, 1, 4, 'ACTIVE', NOW()),
+(1, 1, 5, 'ACTIVE', NOW());
+
+
+INSERT INTO schedules (
+    movie_id,
+    hall_id,
+    show_date,
+    total_count,
+    remain_count,
+    status,
+    created_by_admin_id,
+    updated_by_admin_id,
+    created_at,
+    updated_at
+) VALUES
+(1, 1, '2026-04-08 09:00:00', 30, 30, 'OPEN', NULL, NULL, NOW(), NOW()),
+(2, 2, '2026-04-08 14:00:00', 30, 30, 'OPEN', NULL, NULL, NOW(), NOW()),
+(3, 3, '2026-04-08 19:00:00', 30, 30, 'OPEN', NULL, NULL, NOW(), NOW()),
+(4, 4, '2026-04-09 09:00:00', 30, 30, 'OPEN', NULL, NULL, NOW(), NOW()),
+(5, 5, '2026-04-09 14:00:00', 30, 30, 'OPEN', NULL, NULL, NOW(), NOW());
+
+
+
+INSERT IGNORE INTO hall_seats (seat_id, hall_id, seat_row_no, seat_col_no, status, created_at) VALUES
+(7, 1, 1, 7, 'ACTIVE', NOW()),
+(10, 1, 1, 10, 'ACTIVE', NOW()),
+(20, 1, 2, 10, 'ACTIVE', NOW());
+
+INSERT INTO booking (user_id, req_count, book_status, created_at, schedule_id) VALUES
+(1, 5, 'PAID', NOW(), 1);
+
+SET @booking_id = LAST_INSERT_ID();
+
+INSERT INTO booking_seats (booking_id, schedule_id, seat_id, created_at) VALUES
+(@booking_id, 1, 1, NOW()),
+(@booking_id, 1, 5, NOW()),
+(@booking_id, 1, 7, NOW()),
+(@booking_id, 1, 10, NOW()),
+(@booking_id, 1, 20, NOW());
+
+
+UPDATE booking
+SET booking_code = 'B20260406-0001'
+WHERE booking_id = 1;
+
+INSERT IGNORE INTO hall_seats (seat_id, hall_id, seat_row_no, seat_col_no, status, created_at) VALUES
+(7, 1, 1, 7, 'ACTIVE', NOW()),
+(10, 1, 1, 10, 'ACTIVE', NOW()),
+(20, 1, 2, 10, 'ACTIVE', NOW());
+
+
+INSERT INTO booking_seats (booking_id, schedule_id, seat_id, created_at) VALUES
+(1, 1, 1, NOW()),
+(1, 1, 2, NOW()),
+(1, 1, 3, NOW()),
+(1, 1, 4, NOW()),
+(1, 1, 5, NOW());

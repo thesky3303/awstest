@@ -2,106 +2,23 @@
   const EDIT_CSS_PATH = '/css/user/edit.css?v=4';
   const USER_READ_MYPAGE_API = '/api/read/user/mypage';
   const USER_WRITE_EDIT_API = '/api/write/auth/edit';
+  const runtime = window.APP_RUNTIME || {};
 
   let isEditSubmitting = false;
 
-  function ensureEditCss() {
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`link[href="${EDIT_CSS_PATH}"]`);
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-          return;
-        }
-
-        existing.addEventListener('load', () => {
-          existing.dataset.loaded = 'true';
-          resolve();
-        }, { once: true });
-
-        existing.addEventListener('error', () => {
-          reject(new Error('edit.css load fail'));
-        }, { once: true });
-
-        return;
-      }
-
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = EDIT_CSS_PATH;
-
-      link.addEventListener('load', () => {
-        link.dataset.loaded = 'true';
-        resolve();
-      }, { once: true });
-
-      link.addEventListener('error', () => {
-        reject(new Error('edit.css load fail'));
-      }, { once: true });
-
-      document.head.appendChild(link);
-    });
-  }
-
-  function getLoginUser() {
-    try {
-      const raw = localStorage.getItem('loginUser');
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (error) {
-      console.error('[edit] loginUser parse error:', error);
-      return null;
-    }
-  }
-
-  function getStoredUserId() {
-    const directUserId =
-      localStorage.getItem('user_id') ||
-      sessionStorage.getItem('user_id');
-
-    if (directUserId) {
-      return String(directUserId);
-    }
-
-    const loginUser = getLoginUser();
-    if (loginUser && loginUser.user_id) {
-      return String(loginUser.user_id);
-    }
-
-    return '';
-  }
-
-  function setStoredUserId(userId) {
-    if (!userId) return;
-    localStorage.setItem('user_id', String(userId));
-  }
-
-  function updateLoginUser(nextFields) {
-    const current = getLoginUser() || {};
-    const next = {
-      ...current,
-      ...nextFields
-    };
-    localStorage.setItem('loginUser', JSON.stringify(next));
-  }
-
   function formatPhone(phone) {
     const raw = String(phone || '').replace(/[^0-9]/g, '');
-
     if (raw.length === 11) {
       return `${raw.slice(0, 3)}-${raw.slice(3, 7)}-${raw.slice(7)}`;
     }
-
     if (raw.length === 10) {
       return `${raw.slice(0, 3)}-${raw.slice(3, 6)}-${raw.slice(6)}`;
     }
-
     return phone || '-';
   }
 
   function formatJoinDate(value) {
     if (!value) return '-';
-
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
       return value;
@@ -110,74 +27,11 @@
     const yyyy = date.getFullYear();
     const mm = String(date.getMonth() + 1).padStart(2, '0');
     const dd = String(date.getDate()).padStart(2, '0');
-
     return `${yyyy}-${mm}-${dd}`;
   }
 
-  function ensureMainBody() {
-    let mainBody = document.getElementById('main-body');
-
-    if (!mainBody) {
-      mainBody = document.createElement('div');
-      mainBody.id = 'main-body';
-      document.body.appendChild(mainBody);
-    }
-
-    return mainBody;
-  }
-
-  function clearMainPageSections() {
-    const mainBody = ensureMainBody();
-    mainBody.innerHTML = '';
-    mainBody.style.display = '';
-
-    const body2 = document.getElementById('main-body2');
-    if (body2) {
-      body2.remove();
-    }
-  }
-
-  function buildReadUrl(userId) {
-    const url = new URL(USER_READ_MYPAGE_API, window.location.origin);
-    url.searchParams.set('user_id', userId);
-    return url.toString();
-  }
-
-  async function fetchMyInfo(userId) {
-    const response = await fetch(buildReadUrl(userId), {
-      method: 'GET',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.message || `HTTP ${response.status}`);
-    }
-
-    return data.user || data.result || data.data || data || {};
-  }
-
-  async function requestEdit(payload) {
-    const response = await fetch(USER_WRITE_EDIT_API, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.message || `HTTP ${response.status}`);
-    }
-
-    return data;
+  function normalizePhone(phone) {
+    return String(phone || '').replace(/[^0-9]/g, '').slice(0, 11);
   }
 
   function renderEditLayout(user) {
@@ -194,13 +48,7 @@
                 <div class="edit-row">
                   <label class="edit-label" for="edit-name">이름</label>
                   <div class="edit-field">
-                    <input
-                      type="text"
-                      id="edit-name"
-                      class="edit-input"
-                      maxlength="20"
-                      value="${user.name || ''}"
-                    />
+                    <input type="text" id="edit-name" class="edit-input" maxlength="20" value="${user.name || ''}" />
                     <div id="edit-name-error" class="edit-error"></div>
                   </div>
                 </div>
@@ -208,14 +56,7 @@
                 <div class="edit-row">
                   <label class="edit-label" for="edit-phone">핸드폰번호</label>
                   <div class="edit-field">
-                    <input
-                      type="text"
-                      id="edit-phone"
-                      class="edit-input"
-                      inputmode="numeric"
-                      maxlength="13"
-                      value="${formatPhone(user.phone || '')}"
-                    />
+                    <input type="text" id="edit-phone" class="edit-input" inputmode="numeric" maxlength="13" value="${formatPhone(user.phone || '')}" />
                     <div id="edit-phone-error" class="edit-error"></div>
                   </div>
                 </div>
@@ -248,17 +89,13 @@
   }
 
   function setFieldError(id, message) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = message || '';
+    const element = document.getElementById(id);
+    if (element) element.textContent = message || '';
   }
 
   function setCommonError(message) {
-    const el = document.getElementById('edit-common-error');
-    if (el) el.textContent = message || '';
-  }
-
-  function normalizePhone(phone) {
-    return String(phone || '').replace(/[^0-9]/g, '').slice(0, 11);
+    const element = document.getElementById('edit-common-error');
+    if (element) element.textContent = message || '';
   }
 
   function validateEditForm(name, phone) {
@@ -280,6 +117,15 @@
     return ok;
   }
 
+  async function fetchMyInfo(userId) {
+    const data = await runtime.getJson(USER_READ_MYPAGE_API, { query: { user_id: userId } });
+    return data.user || data.result || data.data || data || {};
+  }
+
+  async function requestEdit(payload) {
+    return runtime.postJson(USER_WRITE_EDIT_API, payload);
+  }
+
   function bindEditEvents(user) {
     const form = document.getElementById('edit-form');
     const nameInput = document.getElementById('edit-name');
@@ -287,37 +133,35 @@
     const submitButton = document.getElementById('edit-submit-button');
     const cancelButton = document.getElementById('edit-cancel-button');
 
-    nameInput.addEventListener('input', () => {
+    nameInput.addEventListener('input', function () {
       setFieldError('edit-name-error', '');
       setCommonError('');
     });
 
-    phoneInput.addEventListener('input', () => {
+    phoneInput.addEventListener('input', function () {
       const raw = normalizePhone(phoneInput.value);
       phoneInput.value = formatPhone(raw);
       setFieldError('edit-phone-error', '');
       setCommonError('');
     });
 
-    cancelButton.addEventListener('click', () => {
+    cancelButton.addEventListener('click', function () {
       if (typeof window.appNavigate === 'function') {
         window.appNavigate({ view: 'mypage' });
         return;
       }
-
       if (typeof window.openMyPage === 'function') {
         window.openMyPage();
       }
     });
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
       if (isEditSubmitting) return;
 
       clearErrors();
 
-      const userId = getStoredUserId();
+      const userId = runtime.getStoredUserId ? runtime.getStoredUserId() : '';
       const name = nameInput.value.trim();
       const phone = normalizePhone(phoneInput.value);
 
@@ -335,22 +179,22 @@
       submitButton.textContent = '수정중...';
 
       try {
-        await requestEdit({
-          user_id: userId,
-          name: name,
-          phone: phone
-        });
+        await requestEdit({ user_id: userId, name, phone });
 
-        setStoredUserId(userId);
-        updateLoginUser({
-          user_id: userId,
-          name: name,
-          phone: phone,
-          created_at: user.created_at
-        });
+        if (runtime.setStoredUserId) {
+          runtime.setStoredUserId(userId);
+        }
+        if (runtime.patchLoginUser) {
+          runtime.patchLoginUser({
+            user_id: userId,
+            name,
+            phone,
+            created_at: user.created_at
+          });
+        }
 
         if (typeof window.refreshSiteHeader === 'function') {
-          window.refreshSiteHeader();
+          await window.refreshSiteHeader();
         }
 
         if (typeof window.appNavigate === 'function') {
@@ -371,15 +215,17 @@
 
   async function initUserEditPage() {
     try {
-      await ensureEditCss();
+      await runtime.ensureStyle(EDIT_CSS_PATH);
     } catch (error) {
       console.error('[edit] css load error:', error);
     }
 
-    clearMainPageSections();
+    if (runtime.resetPrimarySections) {
+      runtime.resetPrimarySections();
+    }
 
-    const userId = getStoredUserId();
-    const mainBody = ensureMainBody();
+    const userId = runtime.getStoredUserId ? runtime.getStoredUserId() : '';
+    const mainBody = runtime.ensureMainBody ? runtime.ensureMainBody() : document.getElementById('main-body');
 
     if (!userId) {
       mainBody.innerHTML = `

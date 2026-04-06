@@ -1,177 +1,38 @@
 (function () {
   const LOGIN_CSS_PATH = '/css/user/login.css';
-  const LOGIN_STORAGE_KEY = 'loginUser';
-  const REMEMBER_ID_STORAGE_KEY = 'rememberedLoginId';
-  const LOGIN_EXPIRE_MINUTES = 120;
   const LOGIN_API = '/api/read/auth/login';
-  const HOME_URL = '/';
+  const runtime = window.APP_RUNTIME || {};
 
-  let savedScrollY = 0;
   let isLoginSubmitting = false;
 
-  function ensureLoginCss() {
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`link[href="${LOGIN_CSS_PATH}"]`);
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-          return;
-        }
-
-        existing.addEventListener(
-          'load',
-          () => {
-            existing.dataset.loaded = 'true';
-            resolve();
-          },
-          { once: true }
-        );
-        existing.addEventListener('error', reject, { once: true });
-        return;
-      }
-
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = LOGIN_CSS_PATH;
-
-      link.addEventListener(
-        'load',
-        () => {
-          link.dataset.loaded = 'true';
-          resolve();
-        },
-        { once: true }
-      );
-      link.addEventListener('error', reject, { once: true });
-
-      document.head.appendChild(link);
-    });
+  function getRuntimeLoginUser() {
+    return typeof runtime.getLoginUser === 'function' ? runtime.getLoginUser() : null;
   }
 
-  function ensureScript(src) {
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`script[src="${src}"]`);
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-          return;
-        }
-
-        existing.addEventListener(
-          'load',
-          () => {
-            existing.dataset.loaded = 'true';
-            resolve();
-          },
-          { once: true }
-        );
-        existing.addEventListener('error', reject, { once: true });
-        return;
-      }
-
-      const script = document.createElement('script');
-      script.src = src;
-      script.defer = true;
-
-      script.addEventListener(
-        'load',
-        () => {
-          script.dataset.loaded = 'true';
-          resolve();
-        },
-        { once: true }
-      );
-      script.addEventListener('error', reject, { once: true });
-
-      document.body.appendChild(script);
-    });
-  }
-
-  function getExpireTime() {
-    return Date.now() + LOGIN_EXPIRE_MINUTES * 60 * 1000;
-  }
-
-  function saveLoginUser(userData) {
-    const payload = {
-      ...userData,
-      expiresAt: getExpireTime()
-    };
-    localStorage.setItem(LOGIN_STORAGE_KEY, JSON.stringify(payload));
-  }
-
-  function getLoginUser() {
-    const raw = localStorage.getItem(LOGIN_STORAGE_KEY);
-    if (!raw) return null;
-
-    try {
-      const parsed = JSON.parse(raw);
-
-      if (!parsed || typeof parsed !== 'object') {
-        localStorage.removeItem(LOGIN_STORAGE_KEY);
-        return null;
-      }
-
-      if (!parsed.expiresAt || Date.now() > Number(parsed.expiresAt)) {
-        localStorage.removeItem(LOGIN_STORAGE_KEY);
-        return null;
-      }
-
-      return parsed;
-    } catch (error) {
-      localStorage.removeItem(LOGIN_STORAGE_KEY);
-      return null;
+  function closeLoginPage() {
+    if (typeof runtime.removeNodeById === 'function') {
+      runtime.removeNodeById('login-modal-overlay');
+    } else {
+      const overlay = document.getElementById('login-modal-overlay');
+      if (overlay) overlay.remove();
     }
-  }
 
-  function clearLoginUser() {
-    localStorage.removeItem(LOGIN_STORAGE_KEY);
-  }
+    if (typeof runtime.unlockBodyScroll === 'function') {
+      runtime.unlockBodyScroll();
+    }
 
-  function getRememberedLoginId() {
-    return localStorage.getItem(REMEMBER_ID_STORAGE_KEY) || '';
-  }
-
-  function saveRememberedLoginId(loginId) {
-    localStorage.setItem(REMEMBER_ID_STORAGE_KEY, loginId);
-  }
-
-  function clearRememberedLoginId() {
-    localStorage.removeItem(REMEMBER_ID_STORAGE_KEY);
-  }
-
-  function lockBodyScroll() {
-    savedScrollY = window.scrollY || window.pageYOffset || 0;
-    document.body.classList.add('login-modal-open');
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${savedScrollY}px`;
-    document.body.style.left = '0';
-    document.body.style.right = '0';
-    document.body.style.width = '100%';
-  }
-
-  function unlockBodyScroll() {
-    document.body.classList.remove('login-modal-open');
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.left = '';
-    document.body.style.right = '';
-    document.body.style.width = '';
-    window.scrollTo(0, savedScrollY);
-  }
-
-  function removeExistingModal() {
-    const existing = document.getElementById('login-modal-overlay');
-    if (existing) existing.remove();
+    isLoginSubmitting = false;
   }
 
   function clearErrors(modal) {
-    const phoneError = modal.querySelector('.login-field-error[data-error-for="phone"]');
-    const pwError = modal.querySelector('.login-field-error[data-error-for="password"]');
-    const commonError = modal.querySelector('.login-common-error');
+    modal.querySelectorAll('.login-field-error').forEach((node) => {
+      node.textContent = '';
+    });
 
-    if (phoneError) phoneError.textContent = '';
-    if (pwError) pwError.textContent = '';
-    if (commonError) commonError.textContent = '';
+    const commonError = modal.querySelector('.login-common-error');
+    if (commonError) {
+      commonError.textContent = '';
+    }
   }
 
   function setFieldError(modal, field, message) {
@@ -184,31 +45,113 @@
     if (target) target.textContent = message || '';
   }
 
-  function closeLoginPage() {
-    const overlay = document.getElementById('login-modal-overlay');
-    if (overlay) overlay.remove();
-    isLoginSubmitting = false;
-    unlockBodyScroll();
-  }
-
-  function redirectToHome() {
-    window.location.href = HOME_URL;
-  }
-
-  function logoutUser() {
-    clearLoginUser();
-    closeLoginPage();
-
-    if (typeof window.refreshSiteHeader === 'function') {
-      window.refreshSiteHeader();
+  function normalizeResponse(data) {
+    if (!data || typeof data !== 'object') {
+      return {
+        success: false,
+        commonMessage: '로그인 처리 중 오류가 발생했습니다.'
+      };
     }
 
-    alert('로그아웃 되었습니다.');
-    redirectToHome();
+    if (data.message === 'login success' && data.user) {
+      return {
+        success: true,
+        user: data.user
+      };
+    }
+
+    if (data.message === 'invalid input') {
+      return {
+        success: false,
+        fieldErrors: {
+          phone: '전화번호를 입력해 주세요.',
+          password: '비밀번호를 입력해 주세요.'
+        }
+      };
+    }
+
+    if (data.message === '전화번호가 틀립니다.') {
+      return {
+        success: false,
+        fieldErrors: {
+          phone: '전화번호가 틀립니다.'
+        }
+      };
+    }
+
+    if (data.message === '비밀번호가 틀립니다.') {
+      return {
+        success: false,
+        fieldErrors: {
+          password: '비밀번호가 틀립니다.'
+        }
+      };
+    }
+
+    return {
+      success: false,
+      commonMessage: data.message || '서버와 통신 중 문제가 발생했습니다.'
+    };
+  }
+
+  async function requestLogin(phone, password) {
+    try {
+      const data = await runtime.postJson(LOGIN_API, { phone, password });
+      return normalizeResponse(data);
+    } catch (error) {
+      console.error('login fetch error:', error);
+      if (error && error.data) {
+        return normalizeResponse(error.data);
+      }
+      return {
+        success: false,
+        commonMessage: error.message || '서버와 통신 중 문제가 발생했습니다.'
+      };
+    }
+  }
+
+  async function openPwFindPage() {
+    try {
+      if (typeof runtime.ensureScript === 'function') {
+        await runtime.ensureScript('/js/user/pwfind.js');
+      }
+      closeLoginPage();
+
+      if (typeof window.openPwFindPage === 'function') {
+        window.openPwFindPage();
+        return;
+      }
+
+      alert('PW 찾기 화면을 불러오지 못했습니다.');
+    } catch (error) {
+      console.error('pwfind.js load error:', error);
+      alert('PW 찾기 화면을 불러오지 못했습니다.');
+    }
+  }
+
+  async function openSignupPage() {
+    try {
+      if (typeof runtime.ensureScript === 'function') {
+        await runtime.ensureScript('/js/user/signup.js');
+      }
+      closeLoginPage();
+
+      if (typeof window.openSignupPage === 'function') {
+        window.openSignupPage();
+        return;
+      }
+
+      alert('회원가입 화면을 불러오지 못했습니다.');
+    } catch (error) {
+      console.error('signup.js load error:', error);
+      alert('회원가입 화면을 불러오지 못했습니다.');
+    }
   }
 
   function buildModalHtml() {
-    const rememberedLoginId = getRememberedLoginId();
+    const rememberedLoginId = typeof runtime.getRememberedLoginId === 'function'
+      ? runtime.getRememberedLoginId()
+      : '';
     const isRemembered = rememberedLoginId !== '';
 
     const overlay = document.createElement('div');
@@ -271,128 +214,6 @@
     return overlay;
   }
 
-  function normalizeResponse(data) {
-    if (!data || typeof data !== 'object') {
-      return {
-        success: false,
-        commonMessage: '로그인 처리 중 오류가 발생했습니다.'
-      };
-    }
-
-    if (data.message === 'login success' && data.user) {
-      return {
-        success: true,
-        user: data.user
-      };
-    }
-
-    if (data.message === 'invalid input') {
-      return {
-        success: false,
-        fieldErrors: {
-          phone: '전화번호를 입력해 주세요.',
-          password: '비밀번호를 입력해 주세요.'
-        }
-      };
-    }
-
-    if (data.message === '전화번호가 틀립니다.') {
-      return {
-        success: false,
-        fieldErrors: {
-          phone: '전화번호가 틀립니다.'
-        }
-      };
-    }
-
-    if (data.message === '비밀번호가 틀립니다.') {
-      return {
-        success: false,
-        fieldErrors: {
-          password: '비밀번호가 틀립니다.'
-        }
-      };
-    }
-
-    return {
-      success: false,
-      commonMessage: data.message || '서버와 통신 중 문제가 발생했습니다.'
-    };
-  }
-
-  async function requestLogin(phone, password) {
-    let response;
-
-    try {
-      response = await fetch(LOGIN_API, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          phone: phone,
-          password: password
-        })
-      });
-    } catch (error) {
-      console.error('login fetch error:', error);
-      return {
-        success: false,
-        commonMessage: '서버와 통신 중 문제가 발생했습니다.'
-      };
-    }
-
-    let data = {};
-    try {
-      data = await response.json();
-    } catch (e) {
-      data = {};
-    }
-
-    if (!response.ok && !data.message) {
-      return {
-        success: false,
-        commonMessage: `서버 오류 (${response.status})`
-      };
-    }
-
-    return normalizeResponse(data);
-  }
-
-  async function openPwFindPage() {
-    try {
-      await ensureScript('/js/user/pwfind.js');
-      closeLoginPage();
-
-      if (typeof window.openPwFindPage === 'function') {
-        window.openPwFindPage();
-        return;
-      }
-
-      alert('PW 찾기 화면을 불러오지 못했습니다.');
-    } catch (error) {
-      console.error('pwfind.js load error:', error);
-      alert('PW 찾기 화면을 불러오지 못했습니다.');
-    }
-  }
-
-  async function openSignupPage() {
-    try {
-      await ensureScript('/js/user/signup.js');
-      closeLoginPage();
-
-      if (typeof window.openSignupPage === 'function') {
-        window.openSignupPage();
-        return;
-      }
-
-      alert('회원가입 화면을 불러오지 못했습니다.');
-    } catch (error) {
-      console.error('signup.js load error:', error);
-      alert('회원가입 화면을 불러오지 못했습니다.');
-    }
-  }
-
   function bindModalEvents(overlay) {
     const closeButton = overlay.querySelector('.login-modal-close');
     const form = overlay.querySelector('.login-form');
@@ -402,10 +223,16 @@
     const linkButtons = overlay.querySelectorAll('.login-link-button');
     const submitButton = form.querySelector('.login-submit-button');
 
-    closeButton.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
+    closeButton.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
       closeLoginPage();
+    });
+
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) {
+        closeLoginPage();
+      }
     });
 
     phoneInput.addEventListener('input', function () {
@@ -419,27 +246,22 @@
       setCommonError(overlay, '');
     });
 
-    linkButtons.forEach(button => {
+    linkButtons.forEach((button) => {
       button.addEventListener('click', function () {
         const action = button.dataset.action;
-
         if (action === 'pwfind') {
           openPwFindPage();
           return;
         }
-
         if (action === 'signup') {
           openSignupPage();
         }
       });
     });
 
-    form.addEventListener('submit', async function (e) {
-      e.preventDefault();
-
-      if (isLoginSubmitting) {
-        return;
-      }
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      if (isLoginSubmitting) return;
 
       clearErrors(overlay);
 
@@ -448,17 +270,14 @@
       const rememberId = rememberIdInput.checked;
 
       let hasError = false;
-
       if (!phone) {
         setFieldError(overlay, 'phone', '전화번호를 입력해 주세요.');
         hasError = true;
       }
-
       if (!password) {
         setFieldError(overlay, 'password', '비밀번호를 입력해 주세요.');
         hasError = true;
       }
-
       if (hasError) return;
 
       isLoginSubmitting = true;
@@ -467,34 +286,34 @@
 
       try {
         const result = await requestLogin(phone, password);
-
         if (!result.success) {
           if (result.fieldErrors?.phone) {
             setFieldError(overlay, 'phone', result.fieldErrors.phone);
           }
-
           if (result.fieldErrors?.password) {
             setFieldError(overlay, 'password', result.fieldErrors.password);
           }
-
           if (result.commonMessage) {
             setCommonError(overlay, result.commonMessage);
           }
-
           return;
         }
 
         if (rememberId) {
-          saveRememberedLoginId(phone);
+          runtime.saveRememberedLoginId(phone);
         } else {
-          clearRememberedLoginId();
+          runtime.clearRememberedLoginId();
         }
 
-        saveLoginUser(result.user);
+        runtime.setLoginUser(result.user);
         closeLoginPage();
 
         if (typeof window.refreshSiteHeader === 'function') {
-          window.refreshSiteHeader();
+          await window.refreshSiteHeader();
+        }
+
+        if (typeof window.appPrefetchScripts === 'function') {
+          window.appPrefetchScripts(['/js/user/mypage.js', '/js/user/edit.js', '/js/user/changepw.js']);
         }
       } catch (error) {
         console.error('login error:', error);
@@ -508,19 +327,27 @@
   }
 
   async function openLoginPage() {
-    removeExistingModal();
-    isLoginSubmitting = false;
+    const currentUser = getRuntimeLoginUser();
+    if (currentUser) {
+      if (typeof window.appNavigate === 'function') {
+        window.appNavigate({ view: 'mypage' });
+      }
+      return;
+    }
+
+    if (typeof runtime.clearTransientUi === 'function') {
+      runtime.clearTransientUi();
+    }
 
     try {
-      await ensureLoginCss();
+      await runtime.ensureStyle(LOGIN_CSS_PATH);
     } catch (error) {
       console.error('login css load error:', error);
     }
 
     const overlay = buildModalHtml();
-    lockBodyScroll();
+    runtime.lockBodyScroll();
     document.body.appendChild(overlay);
-
     bindModalEvents(overlay);
 
     const firstInput = overlay.querySelector('input[name="phone"]');
@@ -529,9 +356,35 @@
     }
   }
 
+  function logoutUser() {
+    if (typeof runtime.clearLoginUser === 'function') {
+      runtime.clearLoginUser();
+    }
+    closeLoginPage();
+
+    if (typeof window.refreshSiteHeader === 'function') {
+      window.refreshSiteHeader();
+    }
+
+    alert('로그아웃 되었습니다.');
+
+    if (typeof window.appNavigate === 'function') {
+      window.appNavigate({}, { replace: true });
+      return;
+    }
+
+    window.location.href = '/';
+  }
+
   window.openLoginPage = openLoginPage;
   window.closeLoginPage = closeLoginPage;
-  window.getLoginUser = getLoginUser;
-  window.clearLoginUser = clearLoginUser;
+  window.getLoginUser = function () {
+    return runtime.getLoginUser ? runtime.getLoginUser() : null;
+  };
+  window.clearLoginUser = function () {
+    if (runtime.clearLoginUser) {
+      runtime.clearLoginUser();
+    }
+  };
   window.logoutUser = logoutUser;
 })();

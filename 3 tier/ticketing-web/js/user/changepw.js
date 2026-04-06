@@ -1,115 +1,12 @@
 (function () {
   const CHANGE_PW_CSS_PATH = '/css/user/changepw.css?v=3';
   const USER_WRITE_CHANGE_PW_API = '/api/write/auth/change-password';
+  const runtime = window.APP_RUNTIME || {};
 
   let isChangePwSubmitting = false;
 
-  function ensureChangePwCss() {
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`link[href="${CHANGE_PW_CSS_PATH}"]`);
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-          return;
-        }
-
-        existing.addEventListener('load', () => {
-          existing.dataset.loaded = 'true';
-          resolve();
-        }, { once: true });
-
-        existing.addEventListener('error', () => {
-          reject(new Error('changepw.css load fail'));
-        }, { once: true });
-
-        return;
-      }
-
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = CHANGE_PW_CSS_PATH;
-
-      link.addEventListener('load', () => {
-        link.dataset.loaded = 'true';
-        resolve();
-      }, { once: true });
-
-      link.addEventListener('error', () => {
-        reject(new Error('changepw.css load fail'));
-      }, { once: true });
-
-      document.head.appendChild(link);
-    });
-  }
-
-  function getLoginUser() {
-    try {
-      const raw = localStorage.getItem('loginUser');
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (error) {
-      console.error('[changepw] loginUser parse error:', error);
-      return null;
-    }
-  }
-
-  function getStoredUserId() {
-    const directUserId =
-      localStorage.getItem('user_id') ||
-      sessionStorage.getItem('user_id');
-
-    if (directUserId) {
-      return String(directUserId);
-    }
-
-    const loginUser = getLoginUser();
-    if (loginUser && loginUser.user_id) {
-      return String(loginUser.user_id);
-    }
-
-    return '';
-  }
-
   async function requestChangePassword(payload) {
-    const response = await fetch(USER_WRITE_CHANGE_PW_API, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.message || `HTTP ${response.status}`);
-    }
-
-    return data;
-  }
-
-  function ensureMainBody() {
-    let mainBody = document.getElementById('main-body');
-
-    if (!mainBody) {
-      mainBody = document.createElement('div');
-      mainBody.id = 'main-body';
-      document.body.appendChild(mainBody);
-    }
-
-    return mainBody;
-  }
-
-  function clearMainPageSections() {
-    const mainBody = ensureMainBody();
-    mainBody.innerHTML = '';
-    mainBody.style.display = '';
-
-    const body2 = document.getElementById('main-body2');
-    if (body2) {
-      body2.remove();
-    }
+    return runtime.postJson(USER_WRITE_CHANGE_PW_API, payload);
   }
 
   function renderChangePwLayout() {
@@ -169,13 +66,13 @@
   }
 
   function setFieldError(id, message) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = message || '';
+    const element = document.getElementById(id);
+    if (element) element.textContent = message || '';
   }
 
   function setCommonError(message) {
-    const el = document.getElementById('changepw-common-error');
-    if (el) el.textContent = message || '';
+    const element = document.getElementById('changepw-common-error');
+    if (element) element.textContent = message || '';
   }
 
   function validateChangePwForm(currentPassword, newPassword, newPasswordCheck) {
@@ -219,30 +116,26 @@
     const cancelButton = document.getElementById('changepw-cancel-button');
 
     [currentPasswordInput, newPasswordInput, newPasswordCheckInput].forEach((input) => {
-      input.addEventListener('input', () => {
-        clearErrors();
-      });
+      input.addEventListener('input', clearErrors);
     });
 
-    cancelButton.addEventListener('click', () => {
+    cancelButton.addEventListener('click', function () {
       if (typeof window.appNavigate === 'function') {
         window.appNavigate({ view: 'mypage' });
         return;
       }
-
       if (typeof window.openMyPage === 'function') {
         window.openMyPage();
       }
     });
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
       if (isChangePwSubmitting) return;
 
       clearErrors();
 
-      const userId = getStoredUserId();
+      const userId = runtime.getStoredUserId ? runtime.getStoredUserId() : '';
       const currentPassword = currentPasswordInput.value;
       const newPassword = newPasswordInput.value;
       const newPasswordCheck = newPasswordCheckInput.value;
@@ -287,17 +180,18 @@
 
   async function initChangePwPage() {
     try {
-      await ensureChangePwCss();
+      await runtime.ensureStyle(CHANGE_PW_CSS_PATH);
     } catch (error) {
       console.error('[changepw] css load error:', error);
     }
 
-    clearMainPageSections();
+    if (runtime.resetPrimarySections) {
+      runtime.resetPrimarySections();
+    }
 
-    const mainBody = ensureMainBody();
+    const mainBody = runtime.ensureMainBody ? runtime.ensureMainBody() : document.getElementById('main-body');
     mainBody.innerHTML = renderChangePwLayout();
     bindChangePwEvents();
-
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
 

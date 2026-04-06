@@ -1,7 +1,17 @@
 const READ_API_BASE = '/api/read';
 
-async function readApi(path) {
-  const response = await fetch(`${READ_API_BASE}${path}`);
+async function readApi(path, options = {}) {
+  const runtime = window.APP_RUNTIME;
+  const targetPath = `${READ_API_BASE}${path}`;
+
+  if (runtime && typeof runtime.getJson === 'function') {
+    return runtime.getJson(targetPath, options);
+  }
+
+  const response = await fetch(targetPath, {
+    method: 'GET',
+    credentials: 'include'
+  });
 
   if (!response.ok) {
     throw new Error(`READ API 오류: ${response.status}`);

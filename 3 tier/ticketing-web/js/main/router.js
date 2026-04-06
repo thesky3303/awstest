@@ -11,63 +11,48 @@
     footer: '/js/main/body3.js',
     mypage: '/js/user/mypage.js',
     edit: '/js/user/edit.js',
-    changepw: '/js/user/changepw.js'
+    changepw: '/js/user/changepw.js',
+    theatersMain: '/js/theaters/theaters_main.js',
+    theatersDetail: '/js/theaters/theaters_detail.js',
   };
 
-  const ROUTE_SPINNER_DELAY_MS = 2000;
+  const VIEW_ROUTES = {
+    mypage: {
+      scripts: [SCRIPT_PATHS.mypage],
+      action: 'openMyPage',
+      prefetch: [SCRIPT_PATHS.edit, SCRIPT_PATHS.changepw]
+    },
+    edit: {
+      scripts: [SCRIPT_PATHS.mypage, SCRIPT_PATHS.edit],
+      action: 'openUserEdit',
+      prefetch: [SCRIPT_PATHS.changepw]
+    },
+    changepw: {
+      scripts: [SCRIPT_PATHS.mypage, SCRIPT_PATHS.changepw],
+      action: 'openChangePw',
+      prefetch: [SCRIPT_PATHS.edit]
+    },
+    booking: {
+    scripts: [SCRIPT_PATHS.theatersMain],
+    action: 'openTheatersMain',
+    prefetch: [SCRIPT_PATHS.theatersDetail]
+},
+  };
+
+  const ROUTE_SPINNER_DELAY_MS = 1200;
+  const BACKGROUND_PREFETCH_DELAY_MS = 1400;
+
+  const runtime = window.APP_RUNTIME || {};
+  const ensureScript = runtime.ensureScript || (async () => null);
+  const prefetchScripts = runtime.prefetchScripts || function () {};
 
   let routeJob = Promise.resolve();
   let routeLoadingSpinnerTimer = null;
   let routeLoadingToken = 0;
 
-  function ensureScript(src) {
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`script[src="${src}"]`);
-
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-          return;
-        }
-
-        existing.addEventListener('load', () => {
-          existing.dataset.loaded = 'true';
-          resolve();
-        }, { once: true });
-
-        existing.addEventListener('error', () => {
-          reject(new Error(`script load fail: ${src}`));
-        }, { once: true });
-
-        return;
-      }
-
-      const script = document.createElement('script');
-      script.src = src;
-      script.defer = true;
-
-      script.addEventListener('load', () => {
-        script.dataset.loaded = 'true';
-        resolve();
-      }, { once: true });
-
-      script.addEventListener('error', () => {
-        reject(new Error(`script load fail: ${src}`));
-      }, { once: true });
-
-      document.body.appendChild(script);
-    });
-  }
-
   function normalizePathname(pathname) {
-    if (ROOT_PATHS.has(pathname)) {
-      return '/';
-    }
-
-    if (pathname === LEGACY_DETAIL_PATH) {
-      return '/';
-    }
-
+    if (ROOT_PATHS.has(pathname)) return '/';
+    if (pathname === LEGACY_DETAIL_PATH) return '/';
     return pathname;
   }
 
@@ -92,9 +77,9 @@
   function buildUrlFromRoute(route = {}) {
     const url = new URL('/', window.location.origin);
 
-    if (route.view) {
-      url.searchParams.set('view', String(route.view));
-      return `${url.pathname}${url.search}`;
+    const view = String(route.view || '').trim();
+    if (view) {
+      url.searchParams.set('view', view);
     }
 
     const page = toPositiveInt(route.page);
@@ -115,56 +100,9 @@
     return `${url.pathname}${url.search}`;
   }
 
-  function ensureMainBody() {
-    let mainBody = document.getElementById('main-body');
-
-    if (!mainBody) {
-      mainBody = document.createElement('div');
-      mainBody.id = 'main-body';
-      document.body.appendChild(mainBody);
-    }
-
-    return mainBody;
-  }
-
-  function clearMainBody() {
-    const mainBody = ensureMainBody();
-    mainBody.innerHTML = '';
-    mainBody.style.display = '';
-    return mainBody;
-  }
-
-  function removeSection(id) {
-    const node = document.getElementById(id);
-    if (node) node.remove();
-  }
-
-  function clearTransientUi() {
-    const loginOverlay = document.getElementById('login-modal-overlay');
-    if (loginOverlay) {
-      loginOverlay.remove();
-    }
-
-    const mainVideoModal = document.getElementById('main-video-modal');
-    if (mainVideoModal) {
-      mainVideoModal.remove();
-    }
-
-    document.body.classList.remove('login-modal-open');
-    document.body.classList.remove('main-video-modal-open');
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.left = '';
-    document.body.style.right = '';
-    document.body.style.width = '';
-  }
-
   function normalizeLegacyUrlIfNeeded() {
     const url = new URL(window.location.href);
-
-    if (url.pathname !== LEGACY_DETAIL_PATH) {
-      return;
-    }
+    if (url.pathname !== LEGACY_DETAIL_PATH) return;
 
     const next = buildUrlFromRoute({
       page: toPositiveInt(url.searchParams.get('page')),
@@ -176,9 +114,7 @@
   }
 
   function ensureRouteLoadingStyle() {
-    if (document.getElementById(ROUTE_LOADING_STYLE_ID)) {
-      return;
-    }
+    if (document.getElementById(ROUTE_LOADING_STYLE_ID)) return;
 
     const style = document.createElement('style');
     style.id = ROUTE_LOADING_STYLE_ID;
@@ -265,7 +201,7 @@
     `;
 
     const siteHeader = document.getElementById('site-header');
-    const mainBody = ensureMainBody();
+    const mainBody = runtime.ensureMainBody ? runtime.ensureMainBody() : document.getElementById('main-body');
 
     if (siteHeader && siteHeader.parentNode) {
       if (mainBody && mainBody.parentNode === siteHeader.parentNode) {
@@ -283,15 +219,13 @@
   }
 
   function clearRouteLoadingSpinnerTimer() {
-    if (routeLoadingSpinnerTimer) {
-      clearTimeout(routeLoadingSpinnerTimer);
-      routeLoadingSpinnerTimer = null;
-    }
+    if (!routeLoadingSpinnerTimer) return;
+    clearTimeout(routeLoadingSpinnerTimer);
+    routeLoadingSpinnerTimer = null;
   }
 
   function showRouteLoading() {
     ensureRouteLoadingStyle();
-
     const layer = ensureRouteLoadingLayer();
     const indicator = layer.querySelector('[data-route-loading-indicator]');
 
@@ -320,10 +254,8 @@
 
   function hideRouteLoading() {
     clearRouteLoadingSpinnerTimer();
-
     const layer = document.getElementById(ROUTE_LOADING_ID);
-    if (!layer) return;
-    layer.remove();
+    if (layer) layer.remove();
   }
 
   async function ensureFooter() {
@@ -339,11 +271,73 @@
     }
   }
 
+  async function runPageAction(functionName, args = { fromRouter: true }) {
+    const fn = window[functionName];
+    if (typeof fn !== 'function') {
+      throw new Error(`route action missing: ${functionName}`);
+    }
+    return await fn(args);
+  }
+
+  async function renderViewRoute(view, route) {
+    const config = VIEW_ROUTES[view];
+    if (!config) {
+      window.history.replaceState({ __app: true }, '', '/');
+      return renderRoute();
+    }
+
+    if (runtime.resetPrimarySections) {
+      runtime.resetPrimarySections();
+    }
+
+    for (const scriptPath of config.scripts) {
+      await ensureScript(scriptPath);
+    }
+
+    if (Array.isArray(config.prefetch) && config.prefetch.length) {
+      prefetchScripts(config.prefetch);
+    }
+
+    await runPageAction(config.action, { fromRouter: true, route: route || getRouteFromUrl() });
+    await ensureFooter();
+  }
+
+  async function renderMovieRoute(route) {
+    if (runtime.resetPrimarySections) {
+      runtime.resetPrimarySections();
+    }
+
+    await ensureScript(SCRIPT_PATHS.movieMain);
+    prefetchScripts([SCRIPT_PATHS.movieDetail]);
+
+    if (route.movie_id) {
+      await ensureScript(SCRIPT_PATHS.movieDetail);
+      await runPageAction('renderMovieDetail');
+    } else {
+      await runPageAction('renderMovieMain');
+    }
+
+    await ensureFooter();
+  }
+
+  async function renderHomeRoute() {
+    if (runtime.resetPrimarySections) {
+      runtime.resetPrimarySections();
+    }
+
+    await ensureScript(SCRIPT_PATHS.home);
+    prefetchScripts([SCRIPT_PATHS.footer, SCRIPT_PATHS.movieMain, SCRIPT_PATHS.mypage]);
+    await runPageAction('renderHomePage');
+    await ensureFooter();
+  }
+
   async function renderRoute() {
     normalizeLegacyUrlIfNeeded();
 
     const route = getRouteFromUrl();
-    clearTransientUi();
+    if (runtime.clearTransientUi) {
+      runtime.clearTransientUi();
+    }
 
     if (!ROOT_PATHS.has(route.pathname) && route.pathname !== '/') {
       window.history.replaceState({ __app: true }, '', '/');
@@ -351,51 +345,14 @@
     }
 
     if (route.view) {
-      clearMainBody();
-      removeSection('main-body2');
-
-      await ensureScript(SCRIPT_PATHS.mypage);
-
-      if (route.view === 'mypage') {
-        await window.openMyPage({ fromRouter: true });
-      } else if (route.view === 'edit') {
-        await ensureScript(SCRIPT_PATHS.edit);
-        await window.openUserEdit({ fromRouter: true });
-      } else if (route.view === 'changepw') {
-        await ensureScript(SCRIPT_PATHS.changepw);
-        await window.openChangePw({ fromRouter: true });
-      } else {
-        window.history.replaceState({ __app: true }, '', '/');
-        return renderRoute();
-      }
-
-      await ensureFooter();
-      return;
+      return renderViewRoute(route.view, route);
     }
 
     if (route.page || route.q || route.movie_id) {
-      clearMainBody();
-      removeSection('main-body2');
-
-      await ensureScript(SCRIPT_PATHS.movieMain);
-
-      if (route.movie_id) {
-        await ensureScript(SCRIPT_PATHS.movieDetail);
-        await window.renderMovieDetail({ fromRouter: true });
-      } else {
-        await window.renderMovieMain({ fromRouter: true });
-      }
-
-      await ensureFooter();
-      return;
+      return renderMovieRoute(route);
     }
 
-    clearMainBody();
-    removeSection('main-body2');
-
-    await ensureScript(SCRIPT_PATHS.home);
-    await window.renderHomePage({ fromRouter: true });
-    await ensureFooter();
+    return renderHomeRoute();
   }
 
   function queueRender() {
@@ -430,7 +387,23 @@
     return queueRender();
   }
 
+  function boot() {
+    queueRender();
+
+    const warm = function () {
+      prefetchScripts([SCRIPT_PATHS.footer, SCRIPT_PATHS.mypage, SCRIPT_PATHS.movieMain, SCRIPT_PATHS.theatersMain]);
+    };
+
+    if ('requestIdleCallback' in window) {
+      window.requestIdleCallback(warm, { timeout: BACKGROUND_PREFETCH_DELAY_MS });
+    } else {
+      window.setTimeout(warm, BACKGROUND_PREFETCH_DELAY_MS);
+    }
+  }
+
   window.appEnsureScript = ensureScript;
+  window.appPrefetchScript = runtime.prefetchScript || function () {};
+  window.appPrefetchScripts = prefetchScripts;
   window.appGetRoute = getRouteFromUrl;
   window.appBuildUrl = buildUrlFromRoute;
   window.appNavigate = navigate;
@@ -449,10 +422,8 @@
   });
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () {
-      queueRender();
-    });
+    document.addEventListener('DOMContentLoaded', boot);
   } else {
-    queueRender();
+    boot();
   }
 })();

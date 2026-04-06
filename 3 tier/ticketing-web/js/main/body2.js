@@ -2,16 +2,20 @@
   const BODY2_CSS_PATH = '/css/main/body2.css';
   const MOVIE_DETAIL_JS_PATH = '/js/movie/movie_detail.js';
 
-  let movieDetailScriptPromise = null;
 
   function ensureBody2Css() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureStyle === 'function') {
+      return window.APP_RUNTIME.ensureStyle(BODY2_CSS_PATH);
+    }
+
     const exists = document.querySelector(`link[href="${BODY2_CSS_PATH}"]`);
-    if (exists) return;
+    if (exists) return Promise.resolve(exists);
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = BODY2_CSS_PATH;
     document.head.appendChild(link);
+    return Promise.resolve(link);
   }
 
   function ensureMountPoint() {
@@ -80,87 +84,16 @@
     `;
   }
 
-  async function ensureMovieDetailScript() {
-    if (typeof window.renderMovieDetail === 'function') return;
-
-    if (movieDetailScriptPromise) {
-      await movieDetailScriptPromise;
-      return;
-    }
-
-    movieDetailScriptPromise = new Promise((resolve, reject) => {
-      if (typeof window.renderMovieDetail === 'function') {
-        resolve();
-        return;
-      }
-
-      const existing = document.querySelector(`script[src="${MOVIE_DETAIL_JS_PATH}"]`);
-
-      if (existing) {
-        const onLoad = function () {
-          existing.removeEventListener('load', onLoad);
-          existing.removeEventListener('error', onError);
-          resolve();
-        };
-
-        const onError = function () {
-          existing.removeEventListener('load', onLoad);
-          existing.removeEventListener('error', onError);
-          movieDetailScriptPromise = null;
-          reject(new Error('movie_detail.js 로드 실패'));
-        };
-
-        existing.addEventListener('load', onLoad);
-        existing.addEventListener('error', onError);
-
-        if (typeof window.renderMovieDetail === 'function') {
-          resolve();
-        }
-
-        return;
-      }
-
-      const script = document.createElement('script');
-      script.src = MOVIE_DETAIL_JS_PATH;
-      script.async = true;
-
-      script.onload = function () {
-        resolve();
-      };
-
-      script.onerror = function () {
-        movieDetailScriptPromise = null;
-        reject(new Error('movie_detail.js 로드 실패'));
-      };
-
-      document.body.appendChild(script);
-    });
-
-    await movieDetailScriptPromise;
-  }
-
+  
   async function goToMovieDetail(movieId) {
     if (!movieId) return;
 
-    const url = new URL('/movie/detail.html', window.location.origin);
-    url.searchParams.set('movie_id', String(movieId));
-
-    window.history.pushState(
-      {
-        route: 'detail',
-        movie_id: movieId
-      },
-      '',
-      `${url.pathname}${url.search}`
-    );
-
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-
-    await ensureMovieDetailScript();
-
-    if (typeof window.renderMovieDetail === 'function') {
-      await window.renderMovieDetail();
+    if (typeof window.appNavigate === 'function') {
+      await window.appNavigate({ movie_id: movieId });
+      return;
     }
+
+    window.location.href = `/?movie_id=${movieId}`;
   }
 
   async function loadRankedMovies() {
@@ -214,7 +147,11 @@
   }
 
   async function mountBody2() {
-    ensureBody2Css();
+    await ensureBody2Css();
+
+    if (typeof window.appPrefetchScripts === 'function') {
+      window.appPrefetchScripts([MOVIE_DETAIL_JS_PATH]);
+    }
 
     const mount = ensureMountPoint();
     mount.innerHTML = `
@@ -272,10 +209,4 @@
   }
 
   window.renderMainBody2 = mountBody2;
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountBody2);
-  } else {
-    mountBody2();
-  }
 })();

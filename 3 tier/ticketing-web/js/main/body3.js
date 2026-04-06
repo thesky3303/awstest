@@ -2,13 +2,18 @@
   const BODY3_CSS_PATH = '/css/main/body3.css';
 
   function ensureBody3Css() {
+    if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureStyle === 'function') {
+      return window.APP_RUNTIME.ensureStyle(BODY3_CSS_PATH);
+    }
+
     const exists = document.querySelector(`link[href="${BODY3_CSS_PATH}"]`);
-    if (exists) return;
+    if (exists) return Promise.resolve(exists);
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = BODY3_CSS_PATH;
     document.head.appendChild(link);
+    return Promise.resolve(link);
   }
 
   function ensureMountPoint() {
@@ -89,8 +94,8 @@
     return wrapper;
   }
 
-  function mountBody3() {
-    ensureBody3Css();
+  async function mountBody3() {
+    await ensureBody3Css();
 
     const mount = ensureMountPoint();
     mount.innerHTML = '';
@@ -100,9 +105,4 @@
   window.renderMainBody3 = mountBody3;
   window.renderSiteFooter = mountBody3;
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountBody3);
-  } else {
-    mountBody3();
-  }
 })();

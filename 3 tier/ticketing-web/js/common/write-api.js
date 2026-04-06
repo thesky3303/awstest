@@ -1,18 +1,30 @@
 const WRITE_API_BASE = '/api/write';
 
-async function writeApi(path, method = 'POST', data = null) {
-  const options = {
+async function writeApi(path, method = 'POST', data = null, options = {}) {
+  const runtime = window.APP_RUNTIME;
+  const targetPath = `${WRITE_API_BASE}${path}`;
+
+  if (runtime && typeof runtime.requestJson === 'function') {
+    return runtime.requestJson(targetPath, {
+      ...(options || {}),
+      method,
+      body: data
+    });
+  }
+
+  const fetchOptions = {
     method,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json'
     }
   };
 
   if (data !== null) {
-    options.body = JSON.stringify(data);
+    fetchOptions.body = JSON.stringify(data);
   }
 
-  const response = await fetch(`${WRITE_API_BASE}${path}`, options);
+  const response = await fetch(targetPath, fetchOptions);
 
   if (!response.ok) {
     let errorMessage = `WRITE API 오류: ${response.status}`;
@@ -22,8 +34,8 @@ async function writeApi(path, method = 'POST', data = null) {
       if (errorData && errorData.message) {
         errorMessage = errorData.message;
       }
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      console.error(error);
     }
 
     throw new Error(errorMessage);

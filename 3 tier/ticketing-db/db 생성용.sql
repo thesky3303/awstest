@@ -48,9 +48,46 @@ CREATE TABLE movies (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+CREATE TABLE theaters (
+    theater_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    address VARCHAR(255) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE halls (
+    hall_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    theater_id BIGINT NOT NULL,
+    hall_name VARCHAR(20) NOT NULL COMMENT 'A관, B관',
+    total_seats INT NOT NULL DEFAULT 30,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_halls_theater
+        FOREIGN KEY (theater_id) REFERENCES theaters(theater_id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT uq_halls_theater_name UNIQUE (theater_id, hall_name),
+    CONSTRAINT chk_halls_total_seats CHECK (total_seats > 0)
+);
+
+CREATE TABLE hall_seats (
+    seat_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    hall_id BIGINT NOT NULL,
+    seat_row_no INT NOT NULL COMMENT '1,2,3...',
+    seat_col_no INT NOT NULL COMMENT '1~10',
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_hall_seats_hall
+        FOREIGN KEY (hall_id) REFERENCES halls(hall_id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT uq_hall_seats_position UNIQUE (hall_id, seat_row_no, seat_col_no),
+    CONSTRAINT chk_hall_seats_row_no CHECK (seat_row_no > 0),
+    CONSTRAINT chk_hall_seats_col_no CHECK (seat_col_no > 0)
+);
+
 CREATE TABLE schedules (
     schedule_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     movie_id BIGINT NOT NULL,
+    hall_id BIGINT NOT NULL,
     show_date DATETIME NOT NULL,
     total_count INT NOT NULL,
     remain_count INT NOT NULL,
@@ -62,6 +99,9 @@ CREATE TABLE schedules (
     CONSTRAINT fk_schedules_movie
         FOREIGN KEY (movie_id) REFERENCES movies(movie_id)
         ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_schedules_hall
+        FOREIGN KEY (hall_id) REFERENCES halls(hall_id)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT fk_schedules_created_admin
         FOREIGN KEY (created_by_admin_id) REFERENCES admin_users(admin_id)
         ON DELETE SET NULL ON UPDATE CASCADE,
@@ -87,6 +127,24 @@ CREATE TABLE booking (
         FOREIGN KEY (schedule_id) REFERENCES schedules(schedule_id)
         ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT chk_booking_req_count CHECK (req_count > 0)
+);
+
+CREATE TABLE booking_seats (
+    booking_seat_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    booking_id BIGINT NOT NULL,
+    schedule_id BIGINT NOT NULL,
+    seat_id BIGINT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_booking_seats_booking
+        FOREIGN KEY (booking_id) REFERENCES booking(booking_id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_booking_seats_schedule
+        FOREIGN KEY (schedule_id) REFERENCES schedules(schedule_id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_booking_seats_seat
+        FOREIGN KEY (seat_id) REFERENCES hall_seats(seat_id)
+        ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT uq_booking_seats_schedule_seat UNIQUE (schedule_id, seat_id)
 );
 
 CREATE TABLE payment (
@@ -174,13 +232,23 @@ CREATE TABLE admin_action_logs (
 CREATE INDEX idx_movies_title ON movies(title);
 CREATE INDEX idx_movies_status ON movies(status);
 
+CREATE INDEX idx_halls_theater_id ON halls(theater_id);
+
+CREATE INDEX idx_hall_seats_hall_id ON hall_seats(hall_id);
+CREATE INDEX idx_hall_seats_status ON hall_seats(status);
+
 CREATE INDEX idx_schedules_movie_id ON schedules(movie_id);
+CREATE INDEX idx_schedules_hall_id ON schedules(hall_id);
 CREATE INDEX idx_schedules_show_date ON schedules(show_date);
 CREATE INDEX idx_schedules_status ON schedules(status);
 
 CREATE INDEX idx_booking_user_id ON booking(user_id);
 CREATE INDEX idx_booking_schedule_id ON booking(schedule_id);
 CREATE INDEX idx_booking_status ON booking(book_status);
+
+CREATE INDEX idx_booking_seats_booking_id ON booking_seats(booking_id);
+CREATE INDEX idx_booking_seats_schedule_id ON booking_seats(schedule_id);
+CREATE INDEX idx_booking_seats_seat_id ON booking_seats(seat_id);
 
 CREATE INDEX idx_inquiries_user_id ON inquiries(user_id);
 CREATE INDEX idx_inquiries_status ON inquiries(inquiry_status);
@@ -196,3 +264,7 @@ CREATE INDEX idx_admin_login_logs_admin_id ON admin_login_logs(admin_id);
 CREATE INDEX idx_admin_action_logs_admin_id ON admin_action_logs(admin_id);
 CREATE INDEX idx_admin_action_logs_target ON admin_action_logs(target_type, target_id);
 
+
+
+ALTER TABLE booking
+ADD COLUMN booking_code VARCHAR(50) NULL UNIQUE AFTER booking_id;
