@@ -96,8 +96,9 @@
     window.location.href = `/?movie_id=${movieId}`;
   }
 
-  async function loadRankedMovies() {
-    const response = await readApi('/movies');
+  async function loadRankedMovies(bustCache) {
+    const fetchOpts = bustCache ? { cache: 'no-store' } : {};
+    const response = await readApi('/movies', fetchOpts);
     if (!Array.isArray(response)) return [];
 
     return response
@@ -146,7 +147,8 @@
     return article;
   }
 
-  async function mountBody2() {
+  async function mountBody2(options) {
+    const bustCache = options && options.bustCache;
     await ensureBody2Css();
 
     if (typeof window.appPrefetchScripts === 'function') {
@@ -161,7 +163,7 @@
     `;
 
     try {
-      const movies = await loadRankedMovies();
+      const movies = await loadRankedMovies(bustCache);
 
       if (!movies.length) {
         mount.innerHTML = `
@@ -209,4 +211,25 @@
   }
 
   window.renderMainBody2 = mountBody2;
+
+  function attachReadCacheRebuildListeners() {
+    const ch = window.TICKETING_READ_CACHE_CHANNEL || 'ticketing-cache';
+    const run = () => {
+      const wrap = document.querySelector('#main-body2 .main-body2-wrap');
+      if (!wrap || wrap.querySelector('.main-body2-loading')) return;
+      if (typeof window.renderMainBody2 === 'function') {
+        window.renderMainBody2({ bustCache: true });
+      }
+    };
+    window.addEventListener('ticketing-cache-rebuilt', run);
+    try {
+      const bc = new BroadcastChannel(ch);
+      bc.onmessage = (ev) => {
+        if (ev.data && ev.data.type === 'rebuilt') run();
+      };
+    } catch (error) {
+      /* ignore */
+    }
+  }
+  attachReadCacheRebuildListeners();
 })();

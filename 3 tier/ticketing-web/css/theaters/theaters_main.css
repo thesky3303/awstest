@@ -3,7 +3,7 @@
 }
 
 .theaters-booking-page {
-  display: flex;
+  display: block;
   min-height: 820px;
   background: #f4f4f4;
   color: #111;
@@ -19,47 +19,10 @@
   color: #555;
 }
 
-.theaters-booking-stepbar {
-  width: 88px;
-  background: #f7f7f7;
-  border-right: 1px solid #d9d9d9;
-  display: flex;
-  flex-direction: column;
-}
-
-.theaters-booking-step {
-  flex: 1;
-  min-height: 140px;
-  border-bottom: 1px solid #d9d9d9;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 18px 10px;
-  text-align: center;
-}
-
-.theaters-booking-step.is-active {
-  background: #e9233a;
-  color: #fff;
-  font-weight: 700;
-}
-
-.theaters-booking-step-no {
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.theaters-booking-step-label {
-  font-size: 15px;
-  line-height: 1.3;
-}
-
 .theaters-booking-content {
-  flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 820px;
 }
 
 .theaters-booking-topbar {
@@ -86,7 +49,7 @@
 .theaters-booking-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: 220px 220px 360px 1fr;
+  grid-template-columns: 240px 380px 1fr;
   min-height: 0;
 }
 
@@ -182,20 +145,6 @@
   line-height: 1;
 }
 
-.theaters-booking-age {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  border-radius: 4px;
-  background: #d8aa2b;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .theaters-booking-movie-title {
   flex: 1;
   white-space: nowrap;
@@ -204,7 +153,19 @@
 }
 
 .theaters-booking-date-header {
-  padding: 16px 22px 8px;
+  padding: 16px 0 8px;
+}
+
+.theaters-booking-date-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 22px 10px;
+}
+
+.theaters-booking-date-header .theaters-booking-month {
+  margin-bottom: 0;
 }
 
 .theaters-booking-month {
@@ -213,11 +174,27 @@
   margin-bottom: 12px;
 }
 
+.theaters-booking-calendar-btn {
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid #c8c8c8;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  color: #222;
+}
+
+.theaters-booking-calendar-btn:hover {
+  border-color: #111;
+}
+
 .theaters-booking-date-strip {
   display: flex;
   gap: 10px;
   align-items: center;
-  padding-bottom: 8px;
+  padding: 0 22px 8px;
   overflow-x: auto;
 }
 
@@ -233,6 +210,16 @@
   padding: 6px 4px;
   cursor: pointer;
   color: #333;
+}
+
+.theaters-booking-date-button.is-sun .theaters-booking-date-day,
+.theaters-booking-date-button.is-sun .theaters-booking-date-week {
+  color: #e9233a;
+}
+
+.theaters-booking-date-button.is-sat .theaters-booking-date-day,
+.theaters-booking-date-button.is-sat .theaters-booking-date-week {
+  color: #1f66ff;
 }
 
 .theaters-booking-date-button.is-active .theaters-booking-date-day {
@@ -315,6 +302,18 @@
   gap: 12px;
 }
 
+.theaters-booking-schedule-empty-hall {
+  flex: 1 1 100%;
+  padding: 20px 12px;
+  font-size: 15px;
+  color: #777;
+  text-align: center;
+}
+
+.theaters-booking-filter-group-time-only {
+  justify-content: flex-start;
+}
+
 .theaters-booking-schedule-card {
   width: 180px;
   border: 1px solid #d7d7d7;
@@ -324,8 +323,19 @@
   cursor: pointer;
 }
 
+.theaters-booking-schedule-card.is-disabled,
+.theaters-booking-schedule-card:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .theaters-booking-schedule-card:hover {
   border-color: #111;
+}
+
+.theaters-booking-schedule-card.is-disabled:hover,
+.theaters-booking-schedule-card:disabled:hover {
+  border-color: #d7d7d7;
 }
 
 .theaters-booking-schedule-time {
@@ -366,4 +376,122 @@
 .theaters-booking-empty-icon {
   font-size: 40px;
   color: #999;
+}
+
+.theaters-booking-calendar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.theaters-booking-calendar-modal {
+  width: 100%;
+  max-width: 320px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  padding: 16px 16px 12px;
+  box-sizing: border-box;
+}
+
+.theaters-booking-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.theaters-booking-cal-title {
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+  flex: 1;
+}
+
+.theaters-booking-cal-nav {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #ddd;
+  background: #f9f9f9;
+  border-radius: 6px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: #111;
+}
+
+.theaters-booking-cal-weekday-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.theaters-booking-cal-weekday-row span:first-child {
+  color: #e9233a;
+}
+
+.theaters-booking-cal-weekday-row span:last-child {
+  color: #1f66ff;
+}
+
+.theaters-booking-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.theaters-booking-cal-slot.is-empty {
+  min-height: 36px;
+}
+
+.theaters-booking-cal-cell {
+  min-height: 36px;
+  border: 1px solid #e5e5e5;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  color: #111;
+}
+
+.theaters-booking-cal-cell:hover:not(:disabled) {
+  border-color: #111;
+}
+
+.theaters-booking-cal-cell.is-today {
+  font-weight: 700;
+}
+
+.theaters-booking-cal-cell.is-selected {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}
+
+.theaters-booking-cal-cell.is-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: #f3f3f3;
+}
+
+.theaters-booking-calendar-close {
+  width: 100%;
+  height: 40px;
+  border: 0;
+  background: #f0f0f0;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  color: #333;
 }

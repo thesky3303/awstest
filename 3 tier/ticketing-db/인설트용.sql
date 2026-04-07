@@ -23,36 +23,36 @@ INSERT INTO movies VALUES
 
 
 INSERT INTO movies VALUES
-(11, '더미데이터1', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터1', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(12, '더미데이터2', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터2', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(13, '더미데이터3', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터3', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(14, '더미데이터4', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터4', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(15, '더미데이터5', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터5', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(16, '더미데이터6', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터6', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(17, '더미데이터7', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터7', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(18, '더미데이터8', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터8', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(19, '더미데이터9', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터9', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(20, '더미데이터10', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터10', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(21, '더미데이터11', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터11', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(22, '더미데이터12', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터12', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(23, '더미데이터13', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터13', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(24, '더미데이터14', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터14', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(25, '더미데이터15', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터15', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(26, '더미데이터16', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터16', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(27, '더미데이터17', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터17', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(28, '더미데이터18', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터18', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(29, '더미데이터19', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터19', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(30, '더미데이터20', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터20', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(31, '더미데이터21', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터21', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(32, '더미데이터22', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터22', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(33, '더미데이터23', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터23', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(34, '더미데이터24', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터24', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(35, '더미데이터25', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터25', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(36, '더미데이터26', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터26', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(37, '더미데이터27', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터27', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(38, '더미데이터28', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터28', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(39, '더미데이터29', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터29', NULL, 'ACTIVE', 'N', NOW(), NOW()),
-(40, '더미데이터30', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터30', NULL, 'ACTIVE', 'N', NOW(), NOW());
+(11, '더미데이터1', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터1', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(12, '더미데이터2', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터2', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(13, '더미데이터3', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터3', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(14, '더미데이터4', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터4', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(15, '더미데이터5', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터5', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(16, '더미데이터6', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터6', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(17, '더미데이터7', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터7', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(18, '더미데이터8', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터8', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(19, '더미데이터9', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터9', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(20, '더미데이터10', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터10', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(21, '더미데이터11', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터11', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(22, '더미데이터12', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터12', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(23, '더미데이터13', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터13', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(24, '더미데이터14', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터14', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(25, '더미데이터15', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터15', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(26, '더미데이터16', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터16', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(27, '더미데이터17', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터17', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(28, '더미데이터18', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터18', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(29, '더미데이터19', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터19', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(30, '더미데이터20', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터20', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(31, '더미데이터21', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터21', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(32, '더미데이터22', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터22', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(33, '더미데이터23', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터23', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(34, '더미데이터24', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터24', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(35, '더미데이터25', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터25', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(36, '더미데이터26', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터26', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(37, '더미데이터27', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터27', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(38, '더미데이터28', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터28', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(39, '더미데이터29', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터29', NULL, 'INACTIVE', 'Y', NOW(), NOW()),
+(40, '더미데이터30', '더미', '더미', 0, '/images/posters/dummy.jpg', '/images/posters/dummy.jpg', NULL, 0, '2026-04-05', '더미데이터30', NULL, 'INACTIVE', 'Y', NOW(), NOW());
 
 
 
@@ -68,7 +68,12 @@ INSERT INTO halls (theater_id, hall_name, total_seats, created_at, updated_at) V
 (1, 'B', 30, NOW(), NOW()),
 (2, 'A', 30, NOW(), NOW()),
 (2, 'B', 30, NOW(), NOW()),
-(3, 'A', 30, NOW(), NOW());
+(3, 'A', 30, NOW(), NOW()),
+(3, 'B', 30, NOW(), NOW()),
+(4, 'A', 30, NOW(), NOW()),
+(4, 'B', 30, NOW(), NOW()),
+(5, 'A', 30, NOW(), NOW()),
+(5, 'B', 30, NOW(), NOW());
 
 INSERT INTO hall_seats (hall_id, seat_row_no, seat_col_no, status, created_at) VALUES
 (1, 1, 1, 'ACTIVE', NOW()),
@@ -76,6 +81,31 @@ INSERT INTO hall_seats (hall_id, seat_row_no, seat_col_no, status, created_at) V
 (1, 1, 3, 'ACTIVE', NOW()),
 (1, 1, 4, 'ACTIVE', NOW()),
 (1, 1, 5, 'ACTIVE', NOW());
+
+-- =====================================================================
+-- [좌석 보강] hall_seats 가 일부만 들어가 있으면 예매(write)에서 seat_id 매핑이 실패(HTTP 400)합니다.
+-- 모든 상영관에 대해 기본 3x10(=30) 좌석을 INSERT IGNORE 로 채웁니다.
+-- (이미 존재하는 좌석은 uq_hall_seats_position(hall_id,row,col) 제약으로 무시됨)
+-- 참고: DB의 seat_row_no는 숫자(1,2,3...)이며 UI에서 1=A열, 2=B열, 3=C열로 표시합니다.
+-- =====================================================================
+WITH RECURSIVE r AS (
+  SELECT 1 AS n
+  UNION ALL SELECT n + 1 FROM r WHERE n < 3
+),
+c AS (
+  SELECT 1 AS n
+  UNION ALL SELECT n + 1 FROM c WHERE n < 10
+)
+INSERT IGNORE INTO hall_seats (hall_id, seat_row_no, seat_col_no, status, created_at)
+SELECT
+  h.hall_id,
+  r.n AS seat_row_no,
+  c.n AS seat_col_no,
+  'ACTIVE' AS status,
+  NOW() AS created_at
+FROM halls h
+CROSS JOIN r
+CROSS JOIN c;
 
 
 INSERT INTO schedules (
@@ -132,3 +162,186 @@ INSERT INTO booking_seats (booking_id, schedule_id, seat_id, created_at) VALUES
 (1, 1, 3, NOW()),
 (1, 1, 4, NOW()),
 (1, 1, 5, NOW());
+
+
+------------------------------------------------------------
+
+-- =====================================================================
+-- [예매 UI] 극장 5개가 화면에 안 나올 때 보강용 (기존 DB에 이미 넣은 경우)
+--
+-- 증상: DB theaters 에는 5행인데 예매 화면 극장 목록이 3개(서울·경기·인천)만 나옴.
+-- 원인(과거): halls 가 theater 1~3 만 있거나, Redis 에 옛날 bootstrap JSON 이 남아 있음.
+-- 조치:
+--   1) 아래 INSERT IGNORE 실행 (극장 4·5 상영관 없으면 추가)
+--   2) ticketing-was Read API 재시작
+--   3) Redis: 관리자 "캐시 재빌드" 또는 theaters bootstrap 키 무효화
+--      (코드상 키: theaters:booking:bootstrap:v4)
+-- =====================================================================
+
+INSERT IGNORE INTO halls (theater_id, hall_name, total_seats, created_at, updated_at) VALUES
+(4, 'A', 30, NOW(), NOW()),
+(4, 'B', 30, NOW(), NOW()),
+(5, 'A', 30, NOW(), NOW()),
+(5, 'B', 30, NOW(), NOW());
+
+-- (선택) 대전·부산 극장에도 상영을 붙이려면 halls 의 hall_id 를 확인한 뒤 schedules 에 행 추가
+
+
+------------------------------------------------------------
+
+-- 이 밑으로 작성
+
+-- =====================================================================
+-- 2) [나중에 새 환경에 넣을 최종본] 최종(H) 스케줄 생성 (INSERT만, 중복 방지)
+--
+-- 전제
+--  - movies(1~10 ACTIVE+hide='N') / theaters / halls 데이터는 이미 들어가 있음
+--  - 더미(movie_id>=11)는 이미 비노출 상태라는 전제(또는 movie_id 1~10만 대상)
+-- =====================================================================
+
+SET @seoul_theater_id := 1;
+SET @schedule_start_date := '2026-04-07';
+SET @schedule_end_date := '2026-05-30';
+SET @turnover_minutes := 3;
+
+SET @seoul_hall_a_id := (
+  SELECT hall_id
+  FROM halls
+  WHERE theater_id = @seoul_theater_id AND hall_name = 'A'
+  ORDER BY hall_id ASC
+  LIMIT 1
+);
+
+INSERT INTO schedules (
+  movie_id,
+  hall_id,
+  show_date,
+  total_count,
+  remain_count,
+  status,
+  created_by_admin_id,
+  updated_by_admin_id,
+  created_at,
+  updated_at
+)
+WITH RECURSIVE dates AS (
+  SELECT DATE(@schedule_start_date) AS d
+  UNION ALL
+  SELECT DATE_ADD(d, INTERVAL 1 DAY) FROM dates WHERE d < DATE(@schedule_end_date)
+),
+other_movies AS (
+  SELECT
+    movie_id,
+    runtime_minutes,
+    ROW_NUMBER() OVER (ORDER BY movie_id ASC) AS rn
+  FROM movies
+  WHERE movie_id BETWEEN 2 AND 10
+    AND UPPER(COALESCE(status, '')) = 'ACTIVE'
+    AND UPPER(COALESCE(hide, 'N')) = 'N'
+    AND COALESCE(runtime_minutes, 0) > 0
+),
+other_movie_count AS (
+  SELECT COUNT(*) AS cnt FROM other_movies
+),
+fixed_king AS (
+  SELECT 1 AS movie_id, TIMESTAMP(d.d, '09:00:00') AS start_at FROM dates d
+  UNION ALL SELECT 1, TIMESTAMP(d.d, '14:00:00') FROM dates d
+  UNION ALL SELECT 1, TIMESTAMP(d.d, '20:00:00') FROM dates d
+  UNION ALL SELECT 1, TIMESTAMP(d.d, '23:00:00') FROM dates d
+),
+fixed_bounds AS (
+  SELECT d.d AS day, TIMESTAMP(d.d, '00:57:00') AS seg_start, TIMESTAMP(d.d, '09:00:00') AS seg_end, 0 AS seg_idx FROM dates d
+  UNION ALL SELECT d.d, TIMESTAMP(d.d, '10:57:00'), TIMESTAMP(d.d, '14:00:00'), 1 FROM dates d
+  UNION ALL SELECT d.d, TIMESTAMP(d.d, '15:57:00'), TIMESTAMP(d.d, '20:00:00'), 2 FROM dates d
+  UNION ALL SELECT d.d, TIMESTAMP(d.d, '21:57:00'), TIMESTAMP(d.d, '23:00:00'), 3 FROM dates d
+),
+pack AS (
+  SELECT
+    fb.day,
+    fb.seg_idx,
+    0 AS step,
+    fb.seg_start AS start_at,
+    fb.seg_end AS seg_end,
+    (MOD(CRC32(CONCAT(DATE_FORMAT(fb.day, '%Y-%m-%d'), '-', fb.seg_idx, '-', 0)), omc.cnt) + 1) AS pick_rn
+  FROM fixed_bounds fb
+  JOIN other_movie_count omc ON omc.cnt > 0
+
+  UNION ALL
+  SELECT
+    p.day,
+    p.seg_idx,
+    p.step + 1,
+    DATE_ADD(p.start_at, INTERVAL (om.runtime_minutes + @turnover_minutes) MINUTE) AS start_at,
+    p.seg_end,
+    (MOD(CRC32(CONCAT(DATE_FORMAT(p.day, '%Y-%m-%d'), '-', p.seg_idx, '-', (p.step + 1))), omc.cnt) + 1) AS pick_rn
+  FROM pack p
+  JOIN other_movie_count omc ON omc.cnt > 0
+  JOIN other_movies om ON om.rn = p.pick_rn
+  WHERE DATE_ADD(p.start_at, INTERVAL (om.runtime_minutes + @turnover_minutes) MINUTE) <= p.seg_end
+),
+packed_shows AS (
+  SELECT
+    om.movie_id,
+    @seoul_hall_a_id AS hall_id,
+    p.start_at AS show_date
+  FROM pack p
+  JOIN other_movies om ON om.rn = p.pick_rn
+),
+wanted AS (
+  SELECT fk.movie_id, @seoul_hall_a_id AS hall_id, fk.start_at AS show_date
+  FROM fixed_king fk
+  UNION ALL
+  SELECT movie_id, hall_id, show_date
+  FROM packed_shows
+)
+SELECT
+  w.movie_id,
+  w.hall_id,
+  w.show_date,
+  COALESCE(h.total_seats, 30) AS total_count,
+  COALESCE(h.total_seats, 30) AS remain_count,
+  'OPEN' AS status,
+  NULL AS created_by_admin_id,
+  NULL AS updated_by_admin_id,
+  NOW() AS created_at,
+  NOW() AS updated_at
+FROM wanted w
+JOIN halls h ON h.hall_id = w.hall_id
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM schedules s
+  WHERE s.movie_id = w.movie_id
+    AND s.hall_id = w.hall_id
+    AND s.show_date = w.show_date
+)
+ORDER BY w.show_date ASC, w.movie_id ASC;
+
+
+
+
+
+
+
+
+USE ticketing_test;
+
+-- 1) A/B/C 체크 제약이 있으면 먼저 제거(이름은 환경마다 다를 수 있음)
+-- 캡쳐에 나온게 chk_hall_seats_row_no 라면:
+ALTER TABLE hall_seats DROP CHECK chk_hall_seats_row_no;
+
+-- 2) 데이터 값을 숫자로 변환 (CASE WHEN ... THEN ...)
+UPDATE hall_seats
+SET seat_row_no = CASE UPPER(TRIM(CAST(seat_row_no AS CHAR)))
+  WHEN 'A' THEN 1
+  WHEN 'B' THEN 2
+  WHEN 'C' THEN 3
+  ELSE CAST(seat_row_no AS UNSIGNED)
+END;
+
+-- 3) 컬럼 타입을 INT로 변경
+ALTER TABLE hall_seats
+  MODIFY seat_row_no INT NOT NULL;
+
+-- 4) 숫자 row 체크 제약 다시 추가
+ALTER TABLE hall_seats
+  ADD CONSTRAINT chk_hall_seats_row_no CHECK (seat_row_no > 0);

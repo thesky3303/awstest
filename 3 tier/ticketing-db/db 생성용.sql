@@ -14,7 +14,7 @@ CREATE TABLE users (
     user_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     phone VARCHAR(20) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    name VARCHAR(50) NOT NULL,
+    name VARCHAR(50) NOT NULL,ㅡ
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -115,9 +115,10 @@ CREATE TABLE schedules (
 
 CREATE TABLE booking (
     booking_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    booking_code VARCHAR(50) NULL UNIQUE,
     user_id BIGINT NOT NULL,
     schedule_id BIGINT NOT NULL,
-    req_count INT NOT NULL,
+    reg_count INT NOT NULL,
     book_status VARCHAR(20) NOT NULL DEFAULT 'HOLD',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_booking_user
@@ -126,7 +127,7 @@ CREATE TABLE booking (
     CONSTRAINT fk_booking_schedule
         FOREIGN KEY (schedule_id) REFERENCES schedules(schedule_id)
         ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT chk_booking_req_count CHECK (req_count > 0)
+    CONSTRAINT chk_booking_reg_count CHECK (reg_count > 0)
 );
 
 CREATE TABLE booking_seats (
@@ -265,6 +266,3 @@ CREATE INDEX idx_admin_action_logs_admin_id ON admin_action_logs(admin_id);
 CREATE INDEX idx_admin_action_logs_target ON admin_action_logs(target_type, target_id);
 
 
-
-ALTER TABLE booking
-ADD COLUMN booking_code VARCHAR(50) NULL UNIQUE AFTER booking_id;

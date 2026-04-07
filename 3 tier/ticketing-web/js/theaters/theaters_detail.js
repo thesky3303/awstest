@@ -1,19 +1,23 @@
 (function () {
   const THEATERS_DETAIL_CSS_PATH = '/css/theaters/theaters_detail.css';
+  // 캐시로 CSS가 안 바뀌는 경우가 있어 버전 쿼리를 붙입니다.
+  const THEATERS_DETAIL_CSS_URL = `${THEATERS_DETAIL_CSS_PATH}?v=20260407_3`;
   const OVERLAY_ID = 'theaters-booking-detail-overlay';
   const BODY_ACTIVE_CLASS = 'theaters-booking-modal-open';
 
   function ensureDetailCss() {
     if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureStyle === 'function') {
-      return window.APP_RUNTIME.ensureStyle(THEATERS_DETAIL_CSS_PATH);
+      return window.APP_RUNTIME.ensureStyle(THEATERS_DETAIL_CSS_URL);
     }
 
-    const exists = document.querySelector(`link[href="${THEATERS_DETAIL_CSS_PATH}"]`);
+    const exists = document.querySelector(
+      `link[href="${THEATERS_DETAIL_CSS_PATH}"], link[href="${THEATERS_DETAIL_CSS_URL}"]`
+    );
     if (exists) return Promise.resolve(exists);
 
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = THEATERS_DETAIL_CSS_PATH;
+    link.href = THEATERS_DETAIL_CSS_URL;
     document.head.appendChild(link);
     return Promise.resolve(link);
   }
@@ -84,9 +88,11 @@
 
   function getStoredUserId() {
     if (window.APP_RUNTIME && typeof window.APP_RUNTIME.getStoredUserId === 'function') {
-      return String(window.APP_RUNTIME.getStoredUserId() || '').trim();
+      const raw = String(window.APP_RUNTIME.getStoredUserId() || '').trim();
+      return /^\d+$/.test(raw) && Number(raw) > 0 ? raw : '';
     }
-    return String(localStorage.getItem('user_id') || sessionStorage.getItem('user_id') || '').trim();
+    const raw = String(localStorage.getItem('user_id') || sessionStorage.getItem('user_id') || '').trim();
+    return /^\d+$/.test(raw) && Number(raw) > 0 ? raw : '';
   }
 
   function createSeatKey(row, col) {
@@ -94,7 +100,9 @@
   }
 
   function createSeatLabel(row, col) {
-    return `${row}열 ${col}번`;
+    const rowNo = toInt(row);
+    const rowLabel = rowNo === 1 ? 'A열' : rowNo === 2 ? 'B열' : rowNo === 3 ? 'C열' : `${rowNo}열`;
+    return `${rowLabel} ${col}번`;
   }
 
   async function requestBooking(payload) {
@@ -102,7 +110,7 @@
       throw new Error('writeApi가 없습니다.');
     }
 
-    return await writeApi('/booking', 'POST', payload);
+    return await writeApi('/theaters/booking/commit', 'POST', payload);
   }
 
   async function openTheatersDetail(options) {
@@ -122,54 +130,94 @@
     const start = parseDateValue(schedule.show_date);
     const end = addMinutes(schedule.show_date, runtimeMinutes);
 
-    const seatRows = Math.max(1, toInt(hall.seat_rows || 3));
-    const seatCols = Math.max(1, toInt(hall.seat_cols || 10));
+    // 좌석 UI는 schedule.total_count 기준으로 10열 고정(최대 30석=3x10)으로 맞춥니다.
+    // hall_seats 가 덜 들어간 환경에서도 UI가 20칸으로 축소되지 않도록 합니다.
+    const seatCols = 10;
     const remainCount = Math.max(0, toInt(schedule.remain_count || 0));
-    const totalCount = Math.max(0, toInt(schedule.total_count || seatRows * seatCols));
+    const totalCount = Math.max(0, toInt(schedule.total_count || 0)) || Math.max(1, toInt(hall.total_seats || 30));
+    const seatRows = Math.max(1, Math.ceil(totalCount / seatCols));
     const price = Math.max(0, toInt(schedule.price || 14000));
     const selectedSeats = new Set();
+    let currentStep = 1; // 1: 좌석선택, 2: 결제확인(화면만), 3: 결과(화면만)
+    let lastResult = null; // { ok: boolean, message: string }
 
     const overlay = document.createElement('div');
     overlay.id = OVERLAY_ID;
     overlay.className = 'theaters-detail-overlay';
     overlay.innerHTML = `
-      <div class="theaters-detail-modal" role="dialog" aria-modal="true" aria-label="좌석 선택">
-        <div class="theaters-detail-head">
-          <div class="theaters-detail-title">${escapeHtml(formatTime(start))}~${escapeHtml(formatTime(end))} (${escapeHtml(hall.hall_name || '상영관')})</div>
-          <button type="button" class="theaters-detail-close" aria-label="닫기">×</button>
-        </div>
+      <div class="theaters-detail-shell" role="dialog" aria-modal="true" aria-label="예매 진행">
+        <nav class="theaters-detail-steps" aria-label="예매 단계">
+          <button type="button" class="theaters-detail-step is-active" data-step="1" disabled tabindex="-1" aria-disabled="true">
+            <span class="theaters-detail-step-no">01</span>
+            <span class="theaters-detail-step-label">좌석선택</span>
+          </button>
+          <button type="button" class="theaters-detail-step" data-step="2" disabled tabindex="-1" aria-disabled="true">
+            <span class="theaters-detail-step-no">02</span>
+            <span class="theaters-detail-step-label">결제</span>
+          </button>
+          <button type="button" class="theaters-detail-step" data-step="3" disabled tabindex="-1" aria-disabled="true">
+            <span class="theaters-detail-step-no">03</span>
+            <span class="theaters-detail-step-label">결제완료</span>
+          </button>
+        </nav>
 
-        <div class="theaters-detail-body">
-          <div class="theaters-detail-summary">
-            <div class="theaters-detail-movie">${escapeHtml(movie.title || '영화')}</div>
-            <div class="theaters-detail-place">${escapeHtml(theater.theater_name || '극장')} · ${escapeHtml(hall.hall_name || '상영관')}</div>
-            <div class="theaters-detail-date">${escapeHtml(String(schedule.show_date || '').slice(0, 16))}</div>
+        <div class="theaters-detail-modal">
+          <div class="theaters-detail-head">
+            <div class="theaters-detail-title">${escapeHtml(formatTime(start))}~${escapeHtml(formatTime(end))} (${escapeHtml(hall.hall_name || '상영관')})</div>
+            <button type="button" class="theaters-detail-close" aria-label="닫기">×</button>
           </div>
 
-          <div class="theaters-detail-seat-count">잔여좌석 <strong class="theaters-detail-remain">${escapeHtml(String(remainCount))}</strong><span>/${escapeHtml(String(totalCount))}</span></div>
-          <div class="theaters-detail-screen-label">SCREEN</div>
-          <div class="theaters-detail-screen-bar"></div>
-          <div class="theaters-detail-seat-grid"></div>
+          <div class="theaters-detail-body">
+            <div class="theaters-detail-summary">
+              <div class="theaters-detail-movie">${escapeHtml(movie.title || '영화')}</div>
+              <div class="theaters-detail-place">${escapeHtml(theater.theater_name || '극장')} · ${escapeHtml(hall.hall_name || '상영관')}</div>
+              <div class="theaters-detail-date">${escapeHtml(String(schedule.show_date || '').slice(0, 16))}</div>
+            </div>
 
-          <div class="theaters-detail-selected-wrap">
-            <div class="theaters-detail-selected-label">선택 좌석</div>
-            <div class="theaters-detail-selected-value">없음</div>
+            <section class="theaters-detail-panel theaters-detail-panel-seat" data-panel="1">
+              <div class="theaters-detail-seat-count">잔여좌석 <strong class="theaters-detail-remain">${escapeHtml(String(remainCount))}</strong><span>/${escapeHtml(String(totalCount))}</span></div>
+              <div class="theaters-detail-screen-label">SCREEN</div>
+              <div class="theaters-detail-screen-bar"></div>
+              <div class="theaters-detail-seat-grid"></div>
+
+              <div class="theaters-detail-selected-wrap">
+                <div class="theaters-detail-selected-label">선택 좌석</div>
+                <div class="theaters-detail-selected-value">없음</div>
+              </div>
+
+              <div class="theaters-detail-price-wrap">
+                <div>선택 인원 <strong class="theaters-detail-count">0명</strong></div>
+                <div>예상 금액 <strong class="theaters-detail-price">0원</strong></div>
+              </div>
+            </section>
+
+            <section class="theaters-detail-panel theaters-detail-panel-confirm" data-panel="2" hidden>
+              <div class="theaters-detail-confirm-title">선택 정보 확인</div>
+              <div class="theaters-detail-confirm-list">
+                <div class="theaters-detail-confirm-row"><span>영화</span><strong class="theaters-detail-confirm-movie"></strong></div>
+                <div class="theaters-detail-confirm-row"><span>극장</span><strong class="theaters-detail-confirm-theater"></strong></div>
+                <div class="theaters-detail-confirm-row"><span>상영관</span><strong class="theaters-detail-confirm-hall"></strong></div>
+                <div class="theaters-detail-confirm-row"><span>일시</span><strong class="theaters-detail-confirm-date"></strong></div>
+                <div class="theaters-detail-confirm-row"><span>좌석</span><strong class="theaters-detail-confirm-seats"></strong></div>
+                <div class="theaters-detail-confirm-row"><span>인원</span><strong class="theaters-detail-confirm-count"></strong></div>
+                <div class="theaters-detail-confirm-row"><span>결제금액</span><strong class="theaters-detail-confirm-price"></strong></div>
+              </div>
+              <div class="theaters-detail-confirm-ask-row">
+                <div class="theaters-detail-confirm-ask">결제를 진행하시겠습니까?</div>
+                <button type="button" class="theaters-detail-reselect">좌석 재선택</button>
+              </div>
+            </section>
+
+            <section class="theaters-detail-panel theaters-detail-panel-result" data-panel="3" hidden>
+              <div class="theaters-detail-result-title">결제 결과</div>
+              <div class="theaters-detail-result-message"></div>
+            </section>
           </div>
 
-          <div class="theaters-detail-price-wrap">
-            <div>선택 인원 <strong class="theaters-detail-count">0명</strong></div>
-            <div>예상 금액 <strong class="theaters-detail-price">0원</strong></div>
+          <div class="theaters-detail-actions">
+            <button type="button" class="theaters-detail-cancel">취소</button>
+            <button type="button" class="theaters-detail-submit">결제 진행</button>
           </div>
-
-          <div class="theaters-detail-guide">
-            <div class="theaters-detail-guide-badge">안내</div>
-            <div>현재 write API는 req_count 기준으로 동작하므로 선택한 좌석 수를 인원수로 전달합니다.</div>
-          </div>
-        </div>
-
-        <div class="theaters-detail-actions">
-          <button type="button" class="theaters-detail-cancel">취소</button>
-          <button type="button" class="theaters-detail-submit">결제 진행</button>
         </div>
       </div>
     `;
@@ -184,6 +232,19 @@
     const selectedCount = overlay.querySelector('.theaters-detail-count');
     const selectedPrice = overlay.querySelector('.theaters-detail-price');
     const remainNode = overlay.querySelector('.theaters-detail-remain');
+    const stepButtons = overlay.querySelectorAll('.theaters-detail-step');
+    const seatPanel = overlay.querySelector('.theaters-detail-panel-seat');
+    const confirmPanel = overlay.querySelector('.theaters-detail-panel-confirm');
+    const resultPanel = overlay.querySelector('.theaters-detail-panel-result');
+    const confirmMovie = overlay.querySelector('.theaters-detail-confirm-movie');
+    const confirmTheater = overlay.querySelector('.theaters-detail-confirm-theater');
+    const confirmHall = overlay.querySelector('.theaters-detail-confirm-hall');
+    const confirmDate = overlay.querySelector('.theaters-detail-confirm-date');
+    const confirmSeats = overlay.querySelector('.theaters-detail-confirm-seats');
+    const confirmCount = overlay.querySelector('.theaters-detail-confirm-count');
+    const confirmPrice = overlay.querySelector('.theaters-detail-confirm-price');
+    const resultMessage = overlay.querySelector('.theaters-detail-result-message');
+    const reselectButton = overlay.querySelector('.theaters-detail-reselect');
 
     function updateSummary() {
       const seatLabels = Array.from(selectedSeats).map((seatKey) => {
@@ -195,7 +256,52 @@
       selectedCount.textContent = `${selectedSeats.size}명`;
       selectedPrice.textContent = `${(selectedSeats.size * price).toLocaleString('ko-KR')}원`;
       remainNode.textContent = String(Math.max(0, remainCount - selectedSeats.size));
-      submitButton.disabled = selectedSeats.size === 0;
+      if (currentStep === 1) {
+        submitButton.disabled = selectedSeats.size === 0;
+      }
+    }
+
+    function updateConfirmPanel() {
+      const seatLabels = Array.from(selectedSeats).map((seatKey) => {
+        const parts = seatKey.split('-');
+        return createSeatLabel(parts[0], parts[1]);
+      });
+
+      if (confirmMovie) confirmMovie.textContent = String(movie.title || '');
+      if (confirmTheater) confirmTheater.textContent = String(theater.theater_name || theater.address || '');
+      if (confirmHall) confirmHall.textContent = String(hall.hall_name || '');
+      if (confirmDate) confirmDate.textContent = String(schedule.show_date || '').slice(0, 16);
+      if (confirmSeats) confirmSeats.textContent = seatLabels.length ? seatLabels.join(', ') : '없음';
+      if (confirmCount) confirmCount.textContent = `${selectedSeats.size}명`;
+      if (confirmPrice) confirmPrice.textContent = `${(selectedSeats.size * price).toLocaleString('ko-KR')}원`;
+    }
+
+    function setStep(step) {
+      currentStep = step;
+
+      stepButtons.forEach((btn) => {
+        const isActive = String(btn.getAttribute('data-step')) === String(step);
+        btn.classList.toggle('is-active', isActive);
+      });
+
+      if (seatPanel) seatPanel.hidden = step !== 1;
+      if (confirmPanel) confirmPanel.hidden = step !== 2;
+      if (resultPanel) resultPanel.hidden = step !== 3;
+
+      if (step === 1) {
+        submitButton.textContent = '결제 진행';
+        submitButton.disabled = selectedSeats.size === 0;
+      } else if (step === 2) {
+        submitButton.textContent = '확인';
+        submitButton.disabled = selectedSeats.size === 0;
+        updateConfirmPanel();
+      } else {
+        submitButton.textContent = '닫기';
+        submitButton.disabled = false;
+        if (resultMessage) {
+          resultMessage.textContent = lastResult && lastResult.message ? lastResult.message : '';
+        }
+      }
     }
 
     function handleSeatClick(button, seatKey) {
@@ -222,7 +328,7 @@
 
       const rowLabel = document.createElement('div');
       rowLabel.className = 'theaters-detail-seat-row-label';
-      rowLabel.textContent = `${row}열`;
+      rowLabel.textContent = row === 1 ? 'A열' : row === 2 ? 'B열' : row === 3 ? 'C열' : `${row}열`;
       rowWrap.appendChild(rowLabel);
 
       const rowSeats = document.createElement('div');
@@ -253,6 +359,7 @@
     }
 
     updateSummary();
+    setStep(1);
 
     closeButton.addEventListener('click', closeModal);
     cancelButton.addEventListener('click', closeModal);
@@ -271,47 +378,108 @@
     }, { once: true });
 
     submitButton.addEventListener('click', async function () {
-      if (!selectedSeats.size) {
-        alert('좌석을 먼저 선택해주세요.');
-        return;
-      }
-
-      const userId = getStoredUserId();
-      if (!userId) {
-        alert('로그인이 필요합니다.');
-        if (typeof window.openLoginPage === 'function') {
-          window.openLoginPage();
+      if (currentStep === 1) {
+        if (!selectedSeats.size) {
+          alert('좌석을 먼저 선택해주세요.');
+          return;
         }
+
+        const userId = getStoredUserId();
+        if (!userId) {
+          alert('로그인이 필요합니다.');
+          if (typeof window.openLoginPage === 'function') {
+            window.openLoginPage();
+          }
+          return;
+        }
+
+        setStep(2);
         return;
       }
 
-      submitButton.disabled = true;
-      submitButton.textContent = '결제 진행 중...';
+      if (currentStep === 2) {
+        const userId = getStoredUserId();
+        if (!userId) {
+          alert('로그인이 필요합니다.');
+          if (typeof window.openLoginPage === 'function') {
+            window.openLoginPage();
+          }
+          return;
+        }
 
-      try {
-        if (!schedule.__demo) {
-          await requestBooking({
+        submitButton.disabled = true;
+        submitButton.textContent = '처리 중...';
+
+        try {
+          const result = await requestBooking({
             user_id: userId,
             schedule_id: schedule.schedule_id,
-            req_count: selectedSeats.size
+            seats: Array.from(selectedSeats)
           });
+
+          if (result && result.ok) {
+            const bookingCode = result.booking_code ? String(result.booking_code) : '';
+            lastResult = {
+              ok: true,
+              message: `${bookingCode ? `예매번호 : ${bookingCode}\n` : ''}결제에 성공했습니다.`
+            };
+            onBooked({
+              schedule_id: schedule.schedule_id,
+              selectedSeats: Array.from(selectedSeats)
+            });
+          } else {
+            const code = result && result.code ? String(result.code) : 'ERROR';
+            if (code === 'DUPLICATE_SEAT') {
+              lastResult = { ok: false, message: '중복좌석입니다.' };
+            } else if (code === 'SOLD_OUT') {
+              lastResult = { ok: false, message: '매진입니다.' };
+            } else if (code === 'INVALID_SEAT' || code === 'BAD_SEAT_KEY') {
+              lastResult = { ok: false, message: '좌석 정보가 올바르지 않습니다. 새로고침 후 다시 시도해주세요.' };
+            } else {
+              lastResult = { ok: false, message: '결제 실패' };
+            }
+          }
+
+          if (window.APP_RUNTIME && typeof window.APP_RUNTIME.notifyReadCacheRebuilt === 'function') {
+            window.APP_RUNTIME.notifyReadCacheRebuilt();
+          }
+
+          setStep(3);
+        } catch (error) {
+          console.error(error);
+          const status = error && error.status ? Number(error.status) : 0;
+          const data = error && error.data ? error.data : null;
+          if (status === 400 && data && data.code) {
+            const code = String(data.code);
+            if (code === 'INVALID_SEAT' || code === 'BAD_SEAT_KEY') {
+              lastResult = { ok: false, message: '좌석 정보가 올바르지 않습니다. 새로고침 후 다시 시도해주세요.' };
+            } else if (code === 'NO_SEATS') {
+              lastResult = { ok: false, message: '좌석을 선택해주세요.' };
+            } else {
+              lastResult = { ok: false, message: '요청값이 올바르지 않습니다.' };
+            }
+          } else {
+            lastResult = { ok: false, message: error && error.message ? error.message : '결제 실패' };
+          }
+          setStep(3);
+        } finally {
+          submitButton.disabled = false;
+          submitButton.textContent = currentStep === 2 ? '확인' : submitButton.textContent;
         }
 
-        onBooked({
-          schedule_id: schedule.schedule_id,
-          selectedSeats: Array.from(selectedSeats)
-        });
+        return;
+      }
 
-        alert(schedule.__demo ? '화면 테스트용 예매가 완료되었습니다.' : '예매가 완료되었습니다.');
+      if (currentStep === 3) {
         closeModal();
-      } catch (error) {
-        console.error(error);
-        alert(error.message || '예매 처리 중 오류가 발생했습니다.');
-      } finally {
-        submitButton.disabled = false;
-        submitButton.textContent = '결제 진행';
       }
     });
+
+    if (reselectButton) {
+      reselectButton.addEventListener('click', function () {
+        setStep(1);
+      });
+    }
   }
 
   window.openTheatersDetail = openTheatersDetail;

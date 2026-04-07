@@ -118,8 +118,9 @@
     });
   }
 
-  async function loadMovies() {
-    const response = await readApi('/movies');
+  async function loadMovies(bustCache) {
+    const fetchOpts = bustCache ? { cache: 'no-store' } : {};
+    const response = await readApi('/movies', fetchOpts);
     if (!Array.isArray(response)) return [];
 
     return response
@@ -343,7 +344,7 @@
     `;
 
     try {
-      allMovies = await loadMovies();
+      allMovies = await loadMovies(false);
       const route = getRoute();
       currentKeyword = route.q || '';
       const filteredMovies = applySearch(currentKeyword);
@@ -379,4 +380,43 @@
     window.location.href = '/?page=1';
   };
   window.handleMovieRoute = mountMovieMain;
+
+  async function refetchMoviesAfterCacheRebuild() {
+    const wrap = document.querySelector('.movie-main-wrap');
+    if (!wrap || wrap.querySelector('.movie-main-loading')) return;
+
+    try {
+      allMovies = await loadMovies(true);
+      const route = getRoute();
+      currentKeyword = route.q || '';
+      const filteredMovies = applySearch(currentKeyword);
+
+      if (!allMovies.length) {
+        wrap.innerHTML = '<div class="movie-main-empty">표시할 영화가 없습니다.</div>';
+        return;
+      }
+
+      const mount = ensureMountPoint();
+      renderMovies(mount, filteredMovies, route.page || 1);
+    } catch (error) {
+      console.error('[movie] Redis 재구성 후 목록 갱신 실패:', error);
+    }
+  }
+
+  function attachReadCacheRebuildListeners() {
+    const ch = window.TICKETING_READ_CACHE_CHANNEL || 'ticketing-cache';
+    const run = () => {
+      refetchMoviesAfterCacheRebuild();
+    };
+    window.addEventListener('ticketing-cache-rebuilt', run);
+    try {
+      const bc = new BroadcastChannel(ch);
+      bc.onmessage = (ev) => {
+        if (ev.data && ev.data.type === 'rebuilt') run();
+      };
+    } catch (error) {
+      /* ignore */
+    }
+  }
+  attachReadCacheRebuildListeners();
 })();

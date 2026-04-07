@@ -442,8 +442,9 @@
     return section;
   }
 
-  async function loadMainMovies() {
-    const response = await readApi('/movies');
+  async function loadMainMovies(bustCache) {
+    const fetchOpts = bustCache ? { cache: 'no-store' } : {};
+    const response = await readApi('/movies', fetchOpts);
     if (!Array.isArray(response)) return [];
 
     return response
@@ -452,7 +453,8 @@
       .slice(0, 4);
   }
 
-  async function mountBody() {
+  async function mountBody(options) {
+    const bustCache = options && options.bustCache;
     await ensureBodyCss();
     createVideoModal();
 
@@ -464,7 +466,7 @@
     `;
 
     try {
-      sliderData = await loadMainMovies();
+      sliderData = await loadMainMovies(bustCache);
       currentIndex = 0;
 
       if (!sliderData.length) {
@@ -494,4 +496,25 @@
   window.renderMainBody = mountBody;
   window.closeMainVideoModal = closeVideoModal;
   window.openMainVideoModal = openVideoModal;
+
+  function attachReadCacheRebuildListeners() {
+    const ch = window.TICKETING_READ_CACHE_CHANNEL || 'ticketing-cache';
+    const run = () => {
+      const wrap = document.querySelector('#main-body .main-body-wrap');
+      if (!wrap || wrap.querySelector('.main-body-loading')) return;
+      if (typeof window.renderMainBody === 'function') {
+        window.renderMainBody({ bustCache: true });
+      }
+    };
+    window.addEventListener('ticketing-cache-rebuilt', run);
+    try {
+      const bc = new BroadcastChannel(ch);
+      bc.onmessage = (ev) => {
+        if (ev.data && ev.data.type === 'rebuilt') run();
+      };
+    } catch (error) {
+      /* ignore */
+    }
+  }
+  attachReadCacheRebuildListeners();
 })();

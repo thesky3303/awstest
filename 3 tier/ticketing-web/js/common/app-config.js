@@ -327,6 +327,7 @@
     removeNodeById('login-modal-overlay');
     removeNodeById('main-video-modal');
     removeNodeById('theaters-booking-detail-overlay');
+    removeNodeById('theaters-booking-calendar-overlay');
     document.body.classList.remove('login-modal-open');
     document.body.classList.remove('main-video-modal-open');
     document.body.classList.remove('theaters-booking-modal-open');
@@ -420,4 +421,19 @@
   runtime.requestJson = requestJson;
   runtime.getJson = getJson;
   runtime.postJson = postJson;
+
+  window.TICKETING_READ_CACHE_CHANNEL = window.TICKETING_READ_CACHE_CHANNEL || 'ticketing-cache';
+
+  function notifyReadCacheRebuilt() {
+    window.dispatchEvent(new CustomEvent('ticketing-cache-rebuilt'));
+    try {
+      const bc = new BroadcastChannel(window.TICKETING_READ_CACHE_CHANNEL);
+      bc.postMessage({ type: 'rebuilt', t: Date.now() });
+      bc.close();
+    } catch (error) {
+      /* BroadcastChannel unavailable */
+    }
+  }
+
+  runtime.notifyReadCacheRebuilt = notifyReadCacheRebuilt;
 })();

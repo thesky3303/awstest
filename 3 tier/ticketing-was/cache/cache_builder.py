@@ -1,22 +1,26 @@
 from threading import Lock
 
-from flask import Blueprint, jsonify
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from cache.redis_client import redis_client
 from read_app import READ_CACHE_TARGETS
 
-cache_builder_bp = Blueprint("cache_builder", __name__)
+router = APIRouter()
 
 _cache_rebuild_lock = Lock()
 
 
-@cache_builder_bp.route("/api/write/admin/cache/rebuild-all", methods=["POST"])
+@router.post("/api/write/admin/cache/rebuild-all")
 def rebuild_all_cache():
     if not _cache_rebuild_lock.acquire(blocking=False):
-        return jsonify({
-            "message": "cache rebuild already running",
-            "success": False
-        }), 409
+        return JSONResponse(
+            status_code=409,
+            content={
+                "message": "cache rebuild already running",
+                "success": False,
+            },
+        )
 
     try:
         redis_client.flushdb()
@@ -30,21 +34,26 @@ def rebuild_all_cache():
 
             result = refresher()
 
-            results.append({
-                "name": target.get("name"),
-                "blueprint": getattr(target.get("blueprint"), "name", None),
-                "result": result
-            })
+            results.append(
+                {
+                    "name": target.get("name"),
+                    "router": getattr(target.get("router"), "prefix", ""),
+                    "result": result,
+                }
+            )
 
-        return jsonify({
+        return {
             "message": "cache rebuild success",
             "success": True,
-            "results": results
-        })
+            "results": results,
+        }
     except Exception as e:
-        return jsonify({
-            "message": f"cache rebuild failed: {str(e)}",
-            "success": False
-        }), 500
+        return JSONResponse(
+            status_code=500,
+            content={
+                "message": f"cache rebuild failed: {str(e)}",
+                "success": False,
+            },
+        )
     finally:
         _cache_rebuild_lock.release()

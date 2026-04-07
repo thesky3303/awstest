@@ -1,37 +1,47 @@
-from flask import Flask, jsonify
-from flask_cors import CORS
-from config import READ_API_HOST, READ_API_PORT
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from user.user_read import user_read_bp
-from movie.movie_read import movie_read_bp
+from auth.auth_user_read import router as auth_user_read_router
 from movie.movie_cache_builder import rebuild_movie_cache
-from auth.auth_user_read import auth_user_read_bp
+from movie.movie_read import router as movie_read_router
+from theater.theaters_cache_builder import rebuild_theaters_cache
+from theater.theaters_read import router as theaters_read_router
+from user.user_read import router as user_read_router
 
-READ_BLUEPRINTS = [
-    user_read_bp,
-    movie_read_bp,
-    auth_user_read_bp,
+READ_ROUTERS = [
+    user_read_router,
+    movie_read_router,
+    theaters_read_router,
+    auth_user_read_router,
 ]
 
 READ_CACHE_TARGETS = [
     {
         "name": "movie_read",
-        "blueprint": movie_read_bp,
+        "router": movie_read_router,
         "refresher": rebuild_movie_cache,
+    },
+    {
+        "name": "theaters_read",
+        "router": theaters_read_router,
+        "refresher": rebuild_theaters_cache,
     },
 ]
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI(title="Ticketing Read API")
 
-for blueprint in READ_BLUEPRINTS:
-    app.register_blueprint(blueprint)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+for router in READ_ROUTERS:
+    app.include_router(router)
 
 
-@app.route("/api/read/health", methods=["GET"])
+@app.get("/api/read/health")
 def health():
-    return jsonify({"message": "read api ok"})
-
-
-if __name__ == "__main__":
-    app.run(host=READ_API_HOST, port=READ_API_PORT, debug=True)
+    return {"message": "read api ok"}

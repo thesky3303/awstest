@@ -1,34 +1,36 @@
-from flask import Flask, jsonify
-from flask_cors import CORS
-from config import WRITE_API_HOST, WRITE_API_PORT
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from user.user_write import user_write_bp
-from booking.booking_write import booking_write_bp
-from review.review_write import review_write_bp
-from inquiry.inquiry_write import inquiry_write_bp
-from auth.auth_user_write import auth_user_write_bp
-from cache.cache_builder import cache_builder_bp
+from auth.auth_user_write import router as auth_user_write_router
+from cache.cache_builder import router as cache_builder_router
+from inquiry.inquiry_write import router as inquiry_write_router
+from review.review_write import router as review_write_router
+from theater.theaters_write import router as theaters_write_router
+from user.user_write import router as user_write_router
 
-WRITE_BLUEPRINTS = [
-    user_write_bp,
-    booking_write_bp,
-    review_write_bp,
-    inquiry_write_bp,
-    auth_user_write_bp,
-    cache_builder_bp,
+WRITE_ROUTERS = [
+    user_write_router,
+    review_write_router,
+    inquiry_write_router,
+    auth_user_write_router,
+    theaters_write_router,
+    cache_builder_router,
 ]
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI(title="Ticketing Write API")
 
-for blueprint in WRITE_BLUEPRINTS:
-    app.register_blueprint(blueprint)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+for router in WRITE_ROUTERS:
+    app.include_router(router)
 
 
-@app.route("/api/write/health", methods=["GET"])
+@app.get("/api/write/health")
 def health():
-    return jsonify({"message": "write api ok"})
-
-
-if __name__ == "__main__":
-    app.run(host=WRITE_API_HOST, port=WRITE_API_PORT, debug=True)
+    return {"message": "write api ok"}

@@ -32,6 +32,9 @@
           try {
             const data = await writeApi('/admin/cache/rebuild-all');
             console.log('cache rebuild result:', data);
+            if (window.APP_RUNTIME && typeof window.APP_RUNTIME.notifyReadCacheRebuilt === 'function') {
+              window.APP_RUNTIME.notifyReadCacheRebuilt();
+            }
             alert(data.message || 'Redis 초기화가 완료되었습니다.');
           } catch (error) {
             console.error(error);

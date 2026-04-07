@@ -10,7 +10,8 @@ async function readApi(path, options = {}) {
 
   const response = await fetch(targetPath, {
     method: 'GET',
-    credentials: 'include'
+    credentials: 'include',
+    cache: options.cache || 'default'
   });
 
   if (!response.ok) {
