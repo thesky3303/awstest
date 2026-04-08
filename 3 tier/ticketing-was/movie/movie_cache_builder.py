@@ -5,8 +5,8 @@ from datetime import date, datetime
 from db import get_db_connection
 from cache.redis_client import redis_client
 
-MOVIES_LIST_CACHE_KEY = "movies:list:active:hide_n:v3"
-MOVIE_DETAIL_CACHE_KEY_FORMAT = "movie:detail:{movie_id}:v3"
+MOVIES_LIST_CACHE_KEY = "movies:list:active_or_dummytitle:v4"
+MOVIE_DETAIL_CACHE_KEY_FORMAT = "movie:detail:{movie_id}:v4"
 
 
 def _to_date_value(value):
@@ -97,8 +97,12 @@ def _fetch_movies_from_db():
                 FROM movies m
                 LEFT JOIN schedules s
                     ON m.movie_id = s.movie_id
-                WHERE m.status = 'ACTIVE'
-                  AND m.hide = 'N'
+                WHERE m.hide = 'N'
+                  AND (
+                    m.status = 'ACTIVE'
+                    OR m.title LIKE '더미데이터%'
+                    OR m.synopsis LIKE '더미데이터%'
+                  )
                 GROUP BY
                     m.movie_id,
                     m.title,
@@ -149,8 +153,12 @@ def _fetch_movie_detail_from_db(movie_id):
                     updated_at
                 FROM movies
                 WHERE movie_id = %s
-                  AND status = 'ACTIVE'
                   AND hide = 'N'
+                  AND (
+                    status = 'ACTIVE'
+                    OR title LIKE '더미데이터%%'
+                    OR synopsis LIKE '더미데이터%%'
+                  )
             """, (movie_id,))
             movie = cur.fetchone()
 
@@ -219,8 +227,12 @@ def rebuild_movie_cache():
             cur.execute("""
                 SELECT movie_id
                 FROM movies
-                WHERE status = 'ACTIVE'
-                  AND hide = 'N'
+                WHERE hide = 'N'
+                  AND (
+                    status = 'ACTIVE'
+                    OR title LIKE '더미데이터%'
+                    OR synopsis LIKE '더미데이터%'
+                  )
                 ORDER BY movie_id ASC
             """)
             movie_rows = cur.fetchall()

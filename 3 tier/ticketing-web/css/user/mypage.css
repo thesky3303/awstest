@@ -95,6 +95,7 @@
   gap: 10px;
   width: 170px;
   flex: 0 0 170px;
+  align-self: center;
 }
 
 .mypage-action-button {
@@ -209,6 +210,24 @@
   color: #f0ad4e;
 }
 
+.mypage-section-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #4f6df5;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.mypage-section-link:hover {
+  color: #3b5de7;
+  text-decoration: underline;
+}
+
 .mypage-empty-box {
   display: flex;
   align-items: center;
@@ -219,6 +238,76 @@
   color: #666666;
   font-size: 16px;
   font-weight: 600;
+  text-align: center;
+}
+
+/* ── Recent bookings preview ── */
+
+.mypage-recent-list {
+  border: 1px solid #e5e5e5;
+  background: #ffffff;
+}
+
+.mypage-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #f0f0f0;
+  transition: background 0.12s ease;
+}
+
+.mypage-recent-item:last-child {
+  border-bottom: none;
+}
+
+.mypage-recent-item:hover {
+  background: #fafbff;
+}
+
+.mypage-recent-date {
+  flex: 0 0 100px;
+  color: #555555;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mypage-recent-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.mypage-recent-badge-concert {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.mypage-recent-badge-movie {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.mypage-recent-title {
+  flex: 1;
+  min-width: 0;
+  color: #222222;
+  font-size: 15px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mypage-recent-region {
+  flex: 0 0 80px;
+  color: #666666;
+  font-size: 14px;
+  font-weight: 500;
   text-align: center;
 }
 
@@ -283,6 +372,21 @@
   .mypage-section-title {
     font-size: 20px;
   }
+
+  .mypage-recent-item {
+    gap: 10px;
+    padding: 12px 16px;
+  }
+
+  .mypage-recent-date {
+    flex: 0 0 auto;
+    font-size: 13px;
+  }
+
+  .mypage-recent-region {
+    flex: 0 0 auto;
+    font-size: 13px;
+  }
 }
 
 @media (max-width: 560px) {
@@ -309,6 +413,18 @@
 
   .mypage-empty-box {
     min-height: 140px;
+    font-size: 14px;
+  }
+
+  .mypage-recent-item {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 14px;
+  }
+
+  .mypage-recent-title {
+    flex: 1 1 100%;
+    order: 3;
     font-size: 14px;
   }
 }

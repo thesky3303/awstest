@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sol cinema</title>
+    <title>Sol ticketing</title>
     <link rel="icon" href="data:," />
 
     <script defer src="/js/common/read-api.js"></script>
@@ -30,7 +30,8 @@
 
         button.addEventListener('click', async function () {
           try {
-            const data = await writeApi('/admin/cache/rebuild-all');
+            // writeApi는 내부적으로 '/api/write' prefix를 붙입니다.
+            const data = await writeApi('/admin/cache/rebuild-all', 'POST', null, { cache: 'no-store' });
             console.log('cache rebuild result:', data);
             if (window.APP_RUNTIME && typeof window.APP_RUNTIME.notifyReadCacheRebuilt === 'function') {
               window.APP_RUNTIME.notifyReadCacheRebuilt();
@@ -38,7 +39,10 @@
             alert(data.message || 'Redis 초기화가 완료되었습니다.');
           } catch (error) {
             console.error(error);
-            alert(error.message || 'Redis 초기화 중 오류가 발생했습니다.');
+            const status = error && typeof error === 'object' ? error.status : null;
+            const message = error && typeof error === 'object' ? error.message : '';
+            const hint = status ? ` (HTTP ${status})` : '';
+            alert((message || 'Redis 초기화 중 오류가 발생했습니다.') + hint);
           }
         });
       });

@@ -104,6 +104,15 @@
       .toLowerCase();
   }
 
+  function isMovieVisibleInMainList(movie) {
+    const hideOk = String(movie.hide || 'N').toUpperCase() === 'N';
+    if (!hideOk) return false;
+    if (String(movie.status || '').toUpperCase() === 'ACTIVE') return true;
+    const title = String(movie.title || '').trim();
+    const synopsis = String(movie.synopsis || '').trim();
+    return title.startsWith('더미데이터') || synopsis.startsWith('더미데이터');
+  }
+
   function applySearch(keyword) {
     currentKeyword = String(keyword || '').trim();
     const normalizedKeyword = normalizeSearchKeyword(currentKeyword);
@@ -114,7 +123,11 @@
 
     return allMovies.filter((movie) => {
       const normalizedTitle = normalizeSearchKeyword(movie.title || '');
-      return normalizedTitle.includes(normalizedKeyword);
+      const normalizedSynopsis = normalizeSearchKeyword(movie.synopsis || '');
+      return (
+        normalizedTitle.includes(normalizedKeyword) ||
+        normalizedSynopsis.includes(normalizedKeyword)
+      );
     });
   }
 
@@ -124,11 +137,7 @@
     if (!Array.isArray(response)) return [];
 
     return response
-      .filter((movie) => {
-        const statusOk = String(movie.status || '').toUpperCase() === 'ACTIVE';
-        const hideOk = String(movie.hide || 'N').toUpperCase() === 'N';
-        return statusOk && hideOk;
-      })
+      .filter((movie) => isMovieVisibleInMainList(movie))
       .sort((a, b) => Number(a.movie_id || 0) - Number(b.movie_id || 0));
   }
 
@@ -183,7 +192,9 @@
 
     const img = article.querySelector('.movie-main-poster');
     img.onerror = function () {
-      this.src = '/images/no-image.png';
+      this.src = typeof window.getFallbackImageUrl === 'function'
+        ? window.getFallbackImageUrl()
+        : '/images/posters/no-image.png';
     };
 
     return article;

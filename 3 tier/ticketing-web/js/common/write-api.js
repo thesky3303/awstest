@@ -28,9 +28,13 @@ async function writeApi(path, method = 'POST', data = null, options = {}) {
 
   if (!response.ok) {
     let errorMessage = `WRITE API 오류: ${response.status}`;
+    const httpError = new Error(errorMessage);
+    httpError.status = response.status;
+    httpError.data = null;
 
     try {
       const errorData = await response.json();
+      httpError.data = errorData;
       if (errorData && errorData.message) {
         errorMessage = errorData.message;
       }
@@ -38,7 +42,8 @@ async function writeApi(path, method = 'POST', data = null, options = {}) {
       console.error(error);
     }
 
-    throw new Error(errorMessage);
+    httpError.message = errorMessage;
+    throw httpError;
   }
 
   return await response.json();

@@ -14,6 +14,11 @@
     changepw: '/js/user/changepw.js',
     theatersMain: '/js/theaters/theaters_main.js',
     theatersDetail: '/js/theaters/theaters_detail.js',
+    bookingHistory: '/js/user/booking_history.js',
+    concertMain: '/js/concert/concert_main.js',
+    concertDetail: '/js/concert/concert_detail.js',
+    concertBooking: '/js/concert/concert_booking.js',
+    concertBookingModal: '/js/concert/concert_booking_modal.js',
   };
 
   const VIEW_ROUTES = {
@@ -32,11 +37,21 @@
       action: 'openChangePw',
       prefetch: [SCRIPT_PATHS.edit]
     },
+    booking_history: {
+      scripts: [SCRIPT_PATHS.bookingHistory],
+      action: 'openBookingHistory',
+      prefetch: [SCRIPT_PATHS.mypage]
+    },
     booking: {
-    scripts: [SCRIPT_PATHS.theatersMain],
-    action: 'openTheatersMain',
-    prefetch: [SCRIPT_PATHS.theatersDetail]
-},
+      scripts: [SCRIPT_PATHS.theatersMain],
+      action: 'openTheatersMain',
+      prefetch: [SCRIPT_PATHS.theatersDetail]
+    },
+    concert_booking: {
+      scripts: [SCRIPT_PATHS.concertBooking],
+      action: 'openConcertBookingFromRouter',
+      prefetch: [SCRIPT_PATHS.concertBookingModal]
+    },
   };
 
   const ROUTE_SPINNER_DELAY_MS = 1200;
@@ -70,7 +85,10 @@
       page: toPositiveInt(params.get('page')),
       movie_id: toPositiveInt(params.get('movie_id')),
       q: String(params.get('q') || '').trim(),
-      view: String(params.get('view') || '').trim()
+      view: String(params.get('view') || '').trim(),
+      c_page: toPositiveInt(params.get('c_page')),
+      c_q: String(params.get('c_q') || '').trim(),
+      concert_id: toPositiveInt(params.get('concert_id'))
     };
   }
 
@@ -95,6 +113,21 @@
     const movieId = toPositiveInt(route.movie_id);
     if (movieId) {
       url.searchParams.set('movie_id', String(movieId));
+    }
+
+    const cPage = toPositiveInt(route.c_page);
+    if (cPage) {
+      url.searchParams.set('c_page', String(cPage));
+    }
+
+    const cQ = String(route.c_q || '').trim();
+    if (cQ) {
+      url.searchParams.set('c_q', cQ);
+    }
+
+    const concertId = toPositiveInt(route.concert_id);
+    if (concertId) {
+      url.searchParams.set('concert_id', String(concertId));
     }
 
     return `${url.pathname}${url.search}`;
@@ -320,6 +353,28 @@
     await ensureFooter();
   }
 
+  async function renderConcertRoute(route) {
+    if (runtime.resetPrimarySections) {
+      runtime.resetPrimarySections();
+    }
+
+    await ensureScript(SCRIPT_PATHS.concertMain);
+    prefetchScripts([
+      SCRIPT_PATHS.concertDetail,
+      SCRIPT_PATHS.concertBooking,
+      SCRIPT_PATHS.concertBookingModal
+    ]);
+
+    if (route.concert_id) {
+      await ensureScript(SCRIPT_PATHS.concertDetail);
+      await runPageAction('renderConcertDetail');
+    } else {
+      await runPageAction('renderConcertMain');
+    }
+
+    await ensureFooter();
+  }
+
   async function renderHomeRoute() {
     if (runtime.resetPrimarySections) {
       runtime.resetPrimarySections();
@@ -348,7 +403,17 @@
       return renderViewRoute(route.view, route);
     }
 
-    if (route.page || route.q || route.movie_id) {
+    // movie_id가 있으면 콘서트 쿼리(c_page 등)와 무관하게 영화 상세를 우선한다.
+    // (콘서트 목록을 본 뒤 URL에 c_page가 남은 채 영화 카드를 누르면 상세가 망가지던 문제)
+    if (route.movie_id) {
+      return renderMovieRoute(route);
+    }
+
+    if (route.concert_id || route.c_page || route.c_q) {
+      return renderConcertRoute(route);
+    }
+
+    if (route.page || route.q) {
       return renderMovieRoute(route);
     }
 
@@ -391,7 +456,13 @@
     queueRender();
 
     const warm = function () {
-      prefetchScripts([SCRIPT_PATHS.footer, SCRIPT_PATHS.mypage, SCRIPT_PATHS.movieMain, SCRIPT_PATHS.theatersMain]);
+      prefetchScripts([
+        SCRIPT_PATHS.footer,
+        SCRIPT_PATHS.mypage,
+        SCRIPT_PATHS.movieMain,
+        SCRIPT_PATHS.theatersMain,
+        SCRIPT_PATHS.concertMain
+      ]);
     };
 
     if ('requestIdleCallback' in window) {

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from auth.auth_user_read import router as auth_user_read_router
+from concert.concert_read import router as concert_read_router
 from movie.movie_cache_builder import rebuild_movie_cache
 from movie.movie_read import router as movie_read_router
 from theater.theaters_cache_builder import rebuild_theaters_cache
@@ -12,6 +13,7 @@ READ_ROUTERS = [
     user_read_router,
     movie_read_router,
     theaters_read_router,
+    concert_read_router,
     auth_user_read_router,
 ]
 

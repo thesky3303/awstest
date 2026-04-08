@@ -16,6 +16,21 @@ from movie.movie_cache_builder import (
 router = APIRouter()
 
 
+def _get_movie_detail_payload(movie_id: int):
+    cache_key = _get_movie_detail_cache_key(movie_id)
+
+    cached_data = redis_client.get(cache_key)
+    if cached_data:
+        return json.loads(cached_data)
+
+    result = _fetch_movie_detail_from_db(movie_id)
+    if result is None:
+        return None
+
+    _write_movie_detail_cache(movie_id, result)
+    return result
+
+
 @router.get("/api/read/movies")
 def get_movies():
     cached_data = redis_client.get(MOVIES_LIST_CACHE_KEY)
@@ -39,17 +54,21 @@ def get_movies_booking_bootstrap():
     return get_theaters_bootstrap()
 
 
-@router.get("/api/read/movie/{movie_id}")
-def get_movie_detail(movie_id: int):
-    cache_key = _get_movie_detail_cache_key(movie_id)
-
-    cached_data = redis_client.get(cache_key)
-    if cached_data:
-        return json.loads(cached_data)
-
-    result = _fetch_movie_detail_from_db(movie_id)
+@router.get("/api/read/movies/detail/{movie_id}")
+def get_movie_detail_under_list_prefix(movie_id: int):
+    """
+    일부 리버스 프록시가 /api/read/movies 하위만 백엔드로 넘기고
+    /api/read/movie/{id} 는 정적 404가 나는 경우가 있어, 목록 API와 같은 prefix 로 상세를 노출한다.
+    """
+    result = _get_movie_detail_payload(movie_id)
     if result is None:
         return JSONResponse(status_code=404, content={"message": "not found"})
+    return result
 
-    _write_movie_detail_cache(movie_id, result)
+
+@router.get("/api/read/movie/{movie_id}")
+def get_movie_detail(movie_id: int):
+    result = _get_movie_detail_payload(movie_id)
+    if result is None:
+        return JSONResponse(status_code=404, content={"message": "not found"})
     return result

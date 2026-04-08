@@ -2,13 +2,13 @@
   function getImageConfig() {
     const appConfig = window.APP_CONFIG || {};
     return appConfig.image || {
-      baseUrl: '/images/',
+      baseUrl: '/images/posters/',
       rewriteRootRelativePaths: false,
       localPrefixMode: 'filename',
       localPrefixes: ['/mnt/hgfs/', '/mnt/data/'],
       manifest: {},
       keepAbsoluteUrls: true,
-      fallbackImageUrl: '/images/no-image.png'
+      fallbackImageUrl: '/images/posters/no-image.png'
     };
   }
 
@@ -37,6 +37,25 @@
     if (!normalized) return '';
     const parts = normalized.split('/');
     return parts[parts.length - 1] || '';
+  }
+
+  function hasFileExtension(fileName) {
+    const value = String(fileName || '').trim();
+    if (!value) return false;
+    if (value.endsWith('.')) return false;
+    const lastDot = value.lastIndexOf('.');
+    if (lastDot <= 0) return false;
+    return lastDot < value.length - 1;
+  }
+
+  function ensureDefaultExtension(pathLike, defaultExt) {
+    const raw = String(pathLike || '').trim();
+    if (!raw) return raw;
+    const fileName = extractFileName(raw);
+    if (!fileName || hasFileExtension(fileName)) return raw;
+    const ext = String(defaultExt || '').trim().replace(/^\./, '');
+    if (!ext) return raw;
+    return `${raw}.${ext}`;
   }
 
   function joinBaseUrl(baseUrl, path) {
@@ -102,6 +121,12 @@
 
     if (!value) return '';
 
+    // allow DB values like "no-image" (no extension) to work with static assets
+    const normalizedBare = value.replace(/^\/+/, '').trim().toLowerCase();
+    if (normalizedBare === 'no-image' || normalizedBare === 'noimage') {
+      return String(config.fallbackImageUrl || '/images/posters/no-image.png').trim();
+    }
+
     const manifestMatch = getManifestMatch(value, config);
     if (manifestMatch) {
       return normalizeManifestValue(manifestMatch, config);
@@ -125,19 +150,19 @@
     const stripped = stripKnownPrefix(value, config);
     if (stripped) {
       if (config.localPrefixMode === 'relative') {
-        return joinBaseUrl(config.baseUrl, stripped);
+        return joinBaseUrl(config.baseUrl, ensureDefaultExtension(stripped, 'png'));
       }
 
       const fileName = extractFileName(stripped);
-      return joinBaseUrl(config.baseUrl, fileName || stripped);
+      return joinBaseUrl(config.baseUrl, ensureDefaultExtension(fileName || stripped, 'png'));
     }
 
-    return joinBaseUrl(config.baseUrl, value);
+    return joinBaseUrl(config.baseUrl, ensureDefaultExtension(value, 'png'));
   }
 
   function getFallbackImageUrl() {
     const config = getImageConfig();
-    return String(config.fallbackImageUrl || '/images/no-image.png').trim();
+    return String(config.fallbackImageUrl || '/images/posters/no-image.png').trim();
   }
 
   window.getImageConfig = getImageConfig;

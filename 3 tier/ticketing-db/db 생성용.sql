@@ -10,11 +10,13 @@ CREATE DATABASE IF NOT EXISTS ticketing_test
 
 USE ticketing_test;
 
+SET default_storage_engine = INNODB;
+
 CREATE TABLE users (
     user_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     phone VARCHAR(20) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    name VARCHAR(50) NOT NULL,ㅡ
+    name VARCHAR(50) NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -135,6 +137,7 @@ CREATE TABLE booking_seats (
     booking_id BIGINT NOT NULL,
     schedule_id BIGINT NOT NULL,
     seat_id BIGINT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_booking_seats_booking
         FOREIGN KEY (booking_id) REFERENCES booking(booking_id)
@@ -144,9 +147,17 @@ CREATE TABLE booking_seats (
         ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT fk_booking_seats_seat
         FOREIGN KEY (seat_id) REFERENCES hall_seats(seat_id)
-        ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT uq_booking_seats_schedule_seat UNIQUE (schedule_id, seat_id)
+        ON DELETE CASCADE ON UPDATE CASCADE
 );
+
+-- ACTIVE만 (schedule_id, seat_id) 유니크 보장 (환불/취소 이력은 중복 허용)
+-- MySQL partial unique index 대체: Generated Column(=NULL) + UNIQUE 특성 활용
+ALTER TABLE booking_seats
+  ADD COLUMN active_schedule_id BIGINT
+    GENERATED ALWAYS AS (CASE WHEN status = 'ACTIVE' THEN schedule_id ELSE NULL END) VIRTUAL,
+  ADD COLUMN active_seat_id BIGINT
+    GENERATED ALWAYS AS (CASE WHEN status = 'ACTIVE' THEN seat_id ELSE NULL END) VIRTUAL,
+  ADD UNIQUE INDEX uq_booking_seats_active_seat (active_schedule_id, active_seat_id);
 
 CREATE TABLE payment (
     payment_id BIGINT AUTO_INCREMENT PRIMARY KEY,

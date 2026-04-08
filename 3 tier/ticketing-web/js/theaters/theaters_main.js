@@ -447,9 +447,15 @@
   function getSchedulesForSelection() {
     if (!state.dataset || !state.selectedTheaterId || !state.selectedMovieId || !state.selectedDateKey) return [];
 
+    const now = new Date();
     return getTheaterSchedules(state.dataset, state.selectedTheaterId)
       .filter((schedule) => toInt(schedule.movie_id) === toInt(state.selectedMovieId))
       .filter((schedule) => toDateKey(schedule.show_date) === state.selectedDateKey)
+      .filter((schedule) => {
+        const showDate = parseDateValue(schedule.show_date);
+        if (!showDate) return false;
+        return showDate.getTime() >= now.getTime();
+      })
       .filter((schedule) => {
         if (state.selectedTimeBand === 'ALL') return true;
         return getTimeBand(schedule.show_date) === state.selectedTimeBand;
@@ -462,6 +468,76 @@
     return state.movies
       .filter(isMovieActiveForBooking)
       .filter((movie) => movieIds.has(toInt(movie.movie_id)));
+  }
+
+  function findFirstTheaterIdForMovie(dataset, movieId) {
+    const mid = toInt(movieId);
+    if (!mid || !dataset) return null;
+    const theaters = getAllTheatersSorted(dataset);
+    for (let i = 0; i < theaters.length; i += 1) {
+      const tid = theaters[i].theater_id;
+      const movies = getAvailableMovies(dataset, tid);
+      if (movies.some((m) => toInt(m.movie_id) === mid)) return tid;
+    }
+    return null;
+  }
+
+  function findEarliestFutureScheduleDateKey(dataset, theaterId, movieId) {
+    const mid = toInt(movieId);
+    const tid = toInt(theaterId);
+    const now = Date.now();
+    let bestTime = null;
+    getTheaterSchedules(dataset, tid).forEach((s) => {
+      if (toInt(s.movie_id) !== mid) return;
+      const d = parseDateValue(s.show_date);
+      if (!d || d.getTime() < now) return;
+      if (bestTime === null || d.getTime() < bestTime) bestTime = d.getTime();
+    });
+    if (bestTime === null) return null;
+    return toDateKey(new Date(bestTime));
+  }
+
+  /**
+   * 영화 상세에서 예매하기로 온 경우 (?view=booking&movie_id=…) 극장·영화·날짜를 맞춤.
+   */
+  function applyBookingUrlMoviePrefill() {
+    let movieId = 0;
+    if (typeof window.appGetRoute === 'function') {
+      const r = window.appGetRoute();
+      if (String(r.view || '').trim() === 'booking') {
+        movieId = toInt(r.movie_id);
+      }
+    }
+    if (!movieId) {
+      const params = new URLSearchParams(window.location.search);
+      if (String(params.get('view') || '').trim() === 'booking') {
+        movieId = toInt(params.get('movie_id'));
+      }
+    }
+    if (!movieId || !state.dataset) return false;
+
+    const known = state.movies.some(
+      (m) => toInt(m.movie_id) === movieId && isMovieActiveForBooking(m)
+    );
+    if (!known) return false;
+
+    const theaterId = findFirstTheaterIdForMovie(state.dataset, movieId);
+    if (!theaterId) return false;
+
+    state.selectedTheaterId = theaterId;
+    state.selectedMovieId = movieId;
+    state.selectedHallId = null;
+
+    const dateKey = findEarliestFutureScheduleDateKey(state.dataset, theaterId, movieId);
+    if (dateKey) {
+      state.dateWindowStartKey = dateKey;
+      state.selectedDateKey = dateKey;
+    } else {
+      state.dateWindowStartKey = toDateKey(new Date());
+      state.selectedDateKey = '';
+    }
+
+    return true;
   }
 
   function ensureStateDefaults() {
@@ -964,6 +1040,9 @@
 
       const remainOverrides = await loadOptionalRemainOverrides();
       applyRemainOverrides(state.dataset, remainOverrides);
+
+      applyBookingUrlMoviePrefill();
+      ensureStateDefaults();
 
       render();
       window.scrollTo({ top: 0, left: 0, behavior: 'auto' });

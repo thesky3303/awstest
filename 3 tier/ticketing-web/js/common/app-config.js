@@ -22,7 +22,7 @@
   };
 
   window.APP_CONFIG.image = {
-    baseUrl: currentImage.baseUrl || '/images/',
+    baseUrl: currentImage.baseUrl || '/images/posters/',
     rewriteRootRelativePaths:
       typeof currentImage.rewriteRootRelativePaths === 'boolean'
         ? currentImage.rewriteRootRelativePaths
@@ -37,7 +37,7 @@
       typeof currentImage.keepAbsoluteUrls === 'boolean'
         ? currentImage.keepAbsoluteUrls
         : true,
-    fallbackImageUrl: currentImage.fallbackImageUrl || '/images/no-image.png'
+    fallbackImageUrl: currentImage.fallbackImageUrl || '/images/posters/no-image.png'
   };
 
   function buildUrl(baseUrl, query) {

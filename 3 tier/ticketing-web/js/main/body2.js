@@ -141,7 +141,9 @@
 
     const img = article.querySelector('.main-body2-poster');
     img.onerror = function () {
-      this.src = '/images/no-image.png';
+      this.src = typeof window.getFallbackImageUrl === 'function'
+        ? window.getFallbackImageUrl()
+        : '/images/posters/no-image.png';
     };
 
     return article;

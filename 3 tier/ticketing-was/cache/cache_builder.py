@@ -57,3 +57,12 @@ def rebuild_all_cache():
         )
     finally:
         _cache_rebuild_lock.release()
+
+
+@router.post("/api/read/movies/cache/rebuild-all")
+def rebuild_all_cache_read_alias():
+    """
+    일부 리버스 프록시가 /api/read/movies 하위만 백엔드로 넘기고 /api/write/* 를 막는 경우가 있어,
+    개발/운영 점검용으로 동일 동작을 read prefix 하위에 별칭으로 노출합니다.
+    """
+    return rebuild_all_cache()

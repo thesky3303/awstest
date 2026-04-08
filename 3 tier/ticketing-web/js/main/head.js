@@ -60,6 +60,17 @@
     window.location.href = '/?page=1';
   }
 
+  function openConcertPage(event) {
+    if (event) event.preventDefault();
+
+    if (typeof window.appNavigate === 'function') {
+      window.appNavigate({ c_page: 1 });
+      return;
+    }
+
+    window.location.href = '/?c_page=1';
+  }
+
   function openBookingPage(event) {
     if (event) event.preventDefault();
 
@@ -146,7 +157,7 @@
     const menuItems = [
       { label: '예매', href: '#', onClick: openBookingPage },
       { label: '영화', href: '#', onClick: openMoviePage },
-      { label: '영화관', href: '#' },
+      { label: '콘서트/뮤지컬', href: '#', onClick: openConcertPage },
       { label: '공지사항', href: '#' },
       { label: '고객센터', href: '#' }
     ];
@@ -224,7 +235,11 @@
     siteHeader.appendChild(createHeader());
 
     if (typeof window.appPrefetchScripts === 'function') {
-      window.appPrefetchScripts(['/js/user/mypage.js', '/js/theaters/theaters_main.js']);
+      window.appPrefetchScripts([
+        '/js/user/mypage.js',
+        '/js/theaters/theaters_main.js',
+        '/js/concert/concert_main.js'
+      ]);
     }
   }
 
@@ -233,6 +248,7 @@
   window.logoutUser = logout;
   window.openMoviePage = openMoviePage;
   window.openBookingPage = openBookingPage;
+  window.openConcertPage = openConcertPage;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', mountHeader);

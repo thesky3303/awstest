@@ -141,7 +141,7 @@
       throw new Error('readApi가 없습니다.');
     }
 
-    return await readApi(`/movie/${movieId}`);
+    return await readApi(`/movies/detail/${movieId}`);
   }
 
   function createInfoItem(label, value) {
@@ -481,7 +481,9 @@
     const poster = mount.querySelector('.movie-detail-poster');
     if (poster) {
       poster.onerror = function () {
-        this.src = '/images/no-image.png';
+        this.src = typeof window.getFallbackImageUrl === 'function'
+          ? window.getFallbackImageUrl()
+          : '/images/posters/no-image.png';
       };
     }
 

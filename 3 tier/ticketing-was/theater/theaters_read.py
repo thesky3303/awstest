@@ -15,8 +15,8 @@ from movie.movie_cache_builder import (
 
 router = APIRouter()
 
-THEATERS_BOOTSTRAP_CACHE_KEY = "theaters:booking:bootstrap:v5"
-THEATER_DETAIL_CACHE_KEY_FORMAT = "theaters:booking:detail:{theater_id}:v5"
+THEATERS_BOOTSTRAP_CACHE_KEY = "theaters:booking:bootstrap:v6"
+THEATER_DETAIL_CACHE_KEY_FORMAT = "theaters:booking:detail:{theater_id}:v6"
 
 EXCLUDED_BOOKING_STATUSES = {
     "CANCEL",
@@ -91,6 +91,21 @@ def _get_theater_detail_cache_key(theater_id):
     return THEATER_DETAIL_CACHE_KEY_FORMAT.format(theater_id=theater_id)
 
 
+def _is_excluded_from_booking(movie_row):
+    """
+    영화 메인 목록용 더미(페이지네이션 테스트 등)는 예매(극장 bootstrap)에서는 제외.
+    (제목·줄거리 어디에 '더미데이터'가 붙었는지 모두 감지)
+    """
+    title = str(movie_row.get("title") or "").strip()
+    synopsis = str(movie_row.get("synopsis") or "").strip()
+    if title.startswith("더미데이터") or synopsis.startswith("더미데이터"):
+        return True
+    genre = str(movie_row.get("genre") or "").strip()
+    director = str(movie_row.get("director") or "").strip()
+    if genre == "더미" and director == "더미":
+        return True
+    return False
+
 
 def _load_movie_cache_rows():
     cached_data = redis_client.get(MOVIES_LIST_CACHE_KEY)
@@ -109,6 +124,8 @@ def _load_movie_cache_rows():
         if str(item.get("status") or "").upper() != "ACTIVE":
             continue
         if str(item.get("hide") or "N").upper() != "N":
+            continue
+        if _is_excluded_from_booking(item):
             continue
         movie_map[_to_int(item.get("movie_id"))] = item
 
@@ -191,6 +208,7 @@ def _fetch_bootstrap_from_db(movie_map):
                     ON hs.seat_id = bs.seat_id
                 JOIN booking b
                     ON b.booking_id = bs.booking_id
+                WHERE bs.status = 'ACTIVE'
                 ORDER BY bs.schedule_id ASC, hs.seat_row_no ASC, hs.seat_col_no ASC
                 """
             )
