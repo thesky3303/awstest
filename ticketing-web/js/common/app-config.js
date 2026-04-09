@@ -323,6 +323,58 @@
     window.scrollTo(0, modalState.savedScrollY || 0);
   }
 
+  /**
+   * S3 정적 웹사이트와 API(ALB) 호스트가 다를 때: /api/* 요청만 별도 오리진으로 보냄.
+   * 설정 우선순위:
+   * - window.__TICKETING_API_ORIGIN__
+   * - localStorage["ticketing-api-origin"]
+   * - meta[name="ticketing-api-origin"]
+   * - APP_CONFIG.apiOrigin
+   * 값 예: http://k8s-xxx.ap-northeast-2.elb.amazonaws.com (끝 슬래시 없음)
+   */
+  function getTicketingApiOrigin() {
+    if (typeof window === 'undefined') return '';
+
+    const fromWin = window.__TICKETING_API_ORIGIN__;
+    if (typeof fromWin === 'string' && fromWin.trim()) {
+      return fromWin.trim().replace(/\/$/, '');
+    }
+
+    try {
+      const fromLs = window.localStorage && window.localStorage.getItem('ticketing-api-origin');
+      if (typeof fromLs === 'string' && fromLs.trim()) {
+        return fromLs.trim().replace(/\/$/, '');
+      }
+    } catch (e) {
+      /* ignore */
+    }
+
+    try {
+      const meta = document.querySelector('meta[name="ticketing-api-origin"]');
+      const c = meta && meta.getAttribute('content');
+      if (typeof c === 'string' && c.trim()) {
+        return c.trim().replace(/\/$/, '');
+      }
+    } catch (e) {
+      /* ignore */
+    }
+
+    const cfg = window.APP_CONFIG || {};
+    if (typeof cfg.apiOrigin === 'string' && cfg.apiOrigin.trim()) {
+      return cfg.apiOrigin.trim().replace(/\/$/, '');
+    }
+
+    return '';
+  }
+
+  function resolveTicketingApiUrl(url) {
+    const u = String(url || '');
+    if (!u.startsWith('/api/')) return u;
+    const origin = getTicketingApiOrigin();
+    if (!origin) return u;
+    return `${origin}${u}`;
+  }
+
   function clearTransientUi() {
     removeNodeById('login-modal-overlay');
     removeNodeById('main-video-modal');
@@ -342,13 +394,16 @@
 
   async function requestJson(url, options) {
     const opts = options || {};
+    const resolvedPath = resolveTicketingApiUrl(url);
     const method = opts.method || 'GET';
     const headers = {
       'Content-Type': 'application/json',
       ...(opts.headers || {})
     };
 
-    const requestUrl = opts.query ? buildUrl(url, opts.query) : new URL(url, window.location.origin).toString();
+    const requestUrl = opts.query
+      ? buildUrl(resolvedPath, opts.query)
+      : new URL(resolvedPath, window.location.origin).toString();
     const fetchOptions = {
       method,
       credentials: opts.credentials || 'include',
@@ -421,6 +476,8 @@
   runtime.requestJson = requestJson;
   runtime.getJson = getJson;
   runtime.postJson = postJson;
+  runtime.getTicketingApiOrigin = getTicketingApiOrigin;
+  runtime.resolveTicketingApiUrl = resolveTicketingApiUrl;
 
   window.TICKETING_READ_CACHE_CHANNEL = window.TICKETING_READ_CACHE_CHANNEL || 'ticketing-cache';
 

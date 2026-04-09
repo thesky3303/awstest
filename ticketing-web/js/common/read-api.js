@@ -1,8 +1,17 @@
 const READ_API_BASE = '/api/read';
 
+function resolveReadTarget(path) {
+  const rel = `${READ_API_BASE}${path}`;
+  const runtime = window.APP_RUNTIME;
+  if (runtime && typeof runtime.resolveTicketingApiUrl === 'function') {
+    return runtime.resolveTicketingApiUrl(rel);
+  }
+  return rel;
+}
+
 async function readApi(path, options = {}) {
   const runtime = window.APP_RUNTIME;
-  const targetPath = `${READ_API_BASE}${path}`;
+  const targetPath = resolveReadTarget(path);
 
   if (runtime && typeof runtime.getJson === 'function') {
     return runtime.getJson(targetPath, options);

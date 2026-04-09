@@ -282,6 +282,7 @@
     try {
       const data = await runtime.getJson(BOOKINGS_API, {
         query: { user_id: userId, page: page, page_size: PAGE_SIZE },
+        cache: 'no-store',
       });
 
       currentPage = data.page || 1;

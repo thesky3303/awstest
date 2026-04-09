@@ -158,8 +158,6 @@
       { label: '예매', href: '#', onClick: openBookingPage },
       { label: '영화', href: '#', onClick: openMoviePage },
       { label: '콘서트/뮤지컬', href: '#', onClick: openConcertPage },
-      { label: '공지사항', href: '#' },
-      { label: '고객센터', href: '#' }
     ];
 
     menuItems.forEach((item) => {

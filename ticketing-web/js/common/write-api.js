@@ -1,8 +1,17 @@
 const WRITE_API_BASE = '/api/write';
 
+function resolveWriteTarget(path) {
+  const rel = `${WRITE_API_BASE}${path}`;
+  const runtime = window.APP_RUNTIME;
+  if (runtime && typeof runtime.resolveTicketingApiUrl === 'function') {
+    return runtime.resolveTicketingApiUrl(rel);
+  }
+  return rel;
+}
+
 async function writeApi(path, method = 'POST', data = null, options = {}) {
   const runtime = window.APP_RUNTIME;
-  const targetPath = `${WRITE_API_BASE}${path}`;
+  const targetPath = resolveWriteTarget(path);
 
   if (runtime && typeof runtime.requestJson === 'function') {
     return runtime.requestJson(targetPath, {

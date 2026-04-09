@@ -6,6 +6,20 @@
     <title>Sol ticketing</title>
     <link rel="icon" href="data:," />
 
+    <!--
+      S3 웹사이트로 열 때: API는 ALB에만 있으므로 여기에 ALB 베이스 URL을 넣어야 /api/* 가 동작합니다.
+      kubectl get ingress -n ticketing -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}'; echo
+      예: content="http://k8s-xxx.ap-northeast-2.elb.amazonaws.com"
+    -->
+    <!--
+      API 오리진은 하드코딩 대신 아래 우선순위로 동작:
+      - window.__TICKETING_API_ORIGIN__
+      - localStorage["ticketing-api-origin"]
+      - meta[name="ticketing-api-origin"]
+      - APP_CONFIG.apiOrigin
+    -->
+    <meta name="ticketing-api-origin" content="" />
+
     <script defer src="/js/common/read-api.js"></script>
     <script defer src="/js/common/write-api.js"></script>
     <script defer src="/js/common/app-config.js"></script>

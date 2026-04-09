@@ -136,8 +136,16 @@
     const response = await readApi('/movies', fetchOpts);
     if (!Array.isArray(response)) return [];
 
-    return response
-      .filter((movie) => isMovieVisibleInMainList(movie))
+    const dedup = new Map();
+    response.forEach((movie) => {
+      if (!movie) return;
+      const id = Number(movie.movie_id || 0);
+      if (!Number.isFinite(id) || id <= 0) return;
+      if (!isMovieVisibleInMainList(movie)) return;
+      if (!dedup.has(id)) dedup.set(id, movie);
+    });
+
+    return Array.from(dedup.values())
       .sort((a, b) => Number(a.movie_id || 0) - Number(b.movie_id || 0));
   }
 
