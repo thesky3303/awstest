@@ -1,0 +1,167 @@
+1. 기본설정
+vi /etc/selinux/config
+SELINUX=disabled
+
+ip 바꾸기
+
+nmcli connection modify ens160 ipv4.addresses 192.168.10.21/24
+nmcli connection up ens160
+
+2. vm쉐어
+
+dnf install -y open-vm-tools open-vm-tools-desktop fuse
+systemctl enable --now vmtoolsd
+
+
+mkdir -p /mnt/hgfs/ticketing-was
+vmhgfs-fuse .host:/ticketing-was /mnt/hgfs/ticketing-was -o allow_other
+
+cat >> /etc/fstab <<'EOF'
+.host:/ticketing-was /mnt/hgfs/ticketing-was fuse.vmhgfs-fuse allow_other,defaults 0 0
+EOF
+
+systemctl daemon-reload
+mount -a
+
+
+3.패키지 다운로드
+
+dnf install -y python3 python3-pip redis
+systemctl enable --now redis
+
+4. api 설정
+
+mkdir -p /root/ticketing-was
+python3 -m venv /root/ticketing-was/venv
+source /root/ticketing-was/venv/bin/activate
+
+pip install --upgrade pip
+pip install flask flask-cors pymysql redis
+
+cat > /etc/systemd/system/read-api.service <<'EOF'
+[Unit]
+Description=Ticketing Read API
+After=network.target redis.service
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/ticketing-was
+ExecStart=/root/ticketing-was/venv/bin/python /mnt/hgfs/ticketing-was/read_app.py
+Restart=always
+RestartSec=3
+User=root
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+
+cat > /etc/systemd/system/write-api.service <<'EOF'
+[Unit]
+Description=Ticketing Write API
+After=network.target redis.service
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/ticketing-was
+ExecStart=/root/ticketing-was/venv/bin/python /mnt/hgfs/ticketing-was/write_app.py
+Restart=always
+RestartSec=3
+User=root
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+5. 최종 확인
+
+systemctl daemon-reload
+systemctl enable --now read-api
+systemctl enable --now write-api
+
+systemctl status read-api -l --no-pager
+systemctl status write-api -l --no-pager
+
+
+
+6. 시스템디 만들기
+
+cat > /etc/systemd/system/ticketing-movie-cache-boot-warm.service <<'EOF'
+[Unit]
+Description=Warm movie cache during first 5 minutes after boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ticketing_movie_cache_boot_warm.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+
+7. 레디스 시스템디 설정
+
+/root/ticketing-was/venv/bin/python -m pip install cryptography
+
+cd /mnt/hgfs/ticketing-was
+PYTHONPATH=/mnt/hgfs/ticketing-was /root/ticketing-was/venv/bin/python /mnt/hgfs/ticketing-was/movie/movie_cache_builder.py
+
+
+vi /usr/local/bin/ticketing_movie_cache_boot_warm.sh
+
+#!/bin/bash
+set -u
+
+BASE_DIR="/mnt/hgfs/ticketing-was"
+PYTHON_BIN="/root/ticketing-was/venv/bin/python"
+RUNNER_FILE="$BASE_DIR/movie/movie_cache_builder.py"
+LOG_FILE="/var/log/ticketing-movie-cache.log"
+
+attempt=1
+success=0
+
+while [ "$attempt" -le 5 ]; do
+    echo "[$(date '+%F %T')] movie cache warm attempt $attempt using $PYTHON_BIN" >> "$LOG_FILE"
+
+    if cd "$BASE_DIR" && PYTHONPATH="$BASE_DIR" "$PYTHON_BIN" "$RUNNER_FILE" >> "$LOG_FILE" 2>&1; then
+        echo "[$(date '+%F %T')] movie cache warm success on attempt $attempt" >> "$LOG_FILE"
+        success=1
+    else
+        echo "[$(date '+%F %T')] movie cache warm failed on attempt $attempt" >> "$LOG_FILE"
+    fi
+
+    if [ "$attempt" -lt 5 ]; then
+        sleep 60
+    fi
+
+    attempt=$((attempt + 1))
+done
+
+if [ "$success" -eq 1 ]; then
+    exit 0
+fi
+
+exit 1
+
+
+chmod +x /usr/local/bin/ticketing_movie_cache_boot_warm.sh
+
+systemctl daemon-reload
+systemctl enable --now ticketing-movie-cache-boot-warm.service
+
+8. 확인
+
+redis-cli KEYS 'movies:list:*'
+redis-cli KEYS 'movie:detail:*' | wc -l
+
+redis-cli TTL 'movies:list:active:hide_n:v3'
+
+systemctl status ticketing-movie-cache-boot-warm.service --no-pager -l | sed -n '1,60p'
+tail -n 100 /var/log/ticketing-movie-cache.log

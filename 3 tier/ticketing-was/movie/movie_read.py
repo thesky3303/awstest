@@ -1,0 +1,74 @@
+import json
+
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+
+from cache.redis_client import redis_client
+from movie.movie_cache_builder import (
+    MOVIES_LIST_CACHE_KEY,
+    _fetch_movie_detail_from_db,
+    _fetch_movies_from_db,
+    _get_movie_detail_cache_key,
+    _write_movie_detail_cache,
+    _write_movies_cache,
+)
+
+router = APIRouter()
+
+
+def _get_movie_detail_payload(movie_id: int):
+    cache_key = _get_movie_detail_cache_key(movie_id)
+
+    cached_data = redis_client.get(cache_key)
+    if cached_data:
+        return json.loads(cached_data)
+
+    result = _fetch_movie_detail_from_db(movie_id)
+    if result is None:
+        return None
+
+    _write_movie_detail_cache(movie_id, result)
+    return result
+
+
+@router.get("/api/read/movies")
+def get_movies():
+    cached_data = redis_client.get(MOVIES_LIST_CACHE_KEY)
+    if cached_data:
+        return json.loads(cached_data)
+
+    rows = _fetch_movies_from_db()
+    _write_movies_cache(rows)
+    return rows
+
+
+@router.get("/api/read/movies/booking-bootstrap")
+def get_movies_booking_bootstrap():
+    """
+    예매(극장/상영) bootstrap JSON.
+    일부 프록시가 /api/read/movies 는 통과시키지만 /api/read/theaters/* 는 정적으로 404 나는 경우가 있어,
+    movie 라우트와 같은 prefix 로 별칭을 둡니다. 실제 로직·캐시 전략은 theaters_read 와 동일합니다.
+    """
+    from theater.theaters_read import get_theaters_bootstrap
+
+    return get_theaters_bootstrap()
+
+
+@router.get("/api/read/movies/detail/{movie_id}")
+def get_movie_detail_under_list_prefix(movie_id: int):
+    """
+    일부 리버스 프록시가 /api/read/movies 하위만 백엔드로 넘기고
+    /api/read/movie/{id} 는 정적 404가 나는 경우가 있어, 목록 API와 같은 prefix 로 상세를 노출한다.
+    """
+    result = _get_movie_detail_payload(movie_id)
+    if result is None:
+        return JSONResponse(status_code=404, content={"message": "not found"})
+    return result
+
+
+@router.get("/api/read/movie/{movie_id}")
+def get_movie_detail(movie_id: int):
+    result = _get_movie_detail_payload(movie_id)
+    if result is None:
+        return JSONResponse(status_code=404, content={"message": "not found"})
+    return result

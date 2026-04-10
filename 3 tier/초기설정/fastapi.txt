@@ -1,0 +1,148 @@
+vi /etc/selinux/config
+SELINUX=disabled
+
+nmcli connection modify ens160 ipv4.addresses 192.168.10.21/24
+nmcli connection up ens160
+
+dnf install -y open-vm-tools open-vm-tools-desktop fuse
+systemctl enable --now vmtoolsd
+
+mkdir -p /mnt/hgfs/ticketing-was
+vmhgfs-fuse .host:/ticketing-was /mnt/hgfs/ticketing-was -o allow_other
+
+grep -q '^.host:/ticketing-was /mnt/hgfs/ticketing-was fuse.vmhgfs-fuse' /etc/fstab || cat >> /etc/fstab <<'FSTABEOF'
+.host:/ticketing-was /mnt/hgfs/ticketing-was fuse.vmhgfs-fuse allow_other,defaults 0 0
+FSTABEOF
+
+systemctl daemon-reload
+mount -a
+
+dnf install -y python3 python3-pip redis
+systemctl enable --now redis
+
+mkdir -p /root/ticketing-was
+python3 -m venv /root/ticketing-was/venv
+source /root/ticketing-was/venv/bin/activate
+
+pip install --upgrade pip
+pip install fastapi "uvicorn[standard]" pymysql redis cryptography
+
+cat > /etc/systemd/system/read-api.service <<'READEOF'
+[Unit]
+Description=Ticketing Read API (FastAPI)
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/hgfs/ticketing-was
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/mnt/hgfs/ticketing-was
+ExecStart=/root/ticketing-was/venv/bin/uvicorn read_app:app --host 0.0.0.0 --port 5000
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+READEOF
+
+cat > /etc/systemd/system/write-api.service <<'WRITEEOF'
+[Unit]
+Description=Ticketing Write API (FastAPI)
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/hgfs/ticketing-was
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/mnt/hgfs/ticketing-was
+ExecStart=/root/ticketing-was/venv/bin/uvicorn write_app:app --host 0.0.0.0 --port 5001
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+WRITEEOF
+
+cat > /usr/local/bin/ticketing_movie_cache_boot_warm.sh <<'WARMSHEOF'
+#!/bin/bash
+set -u
+
+BASE_DIR="/mnt/hgfs/ticketing-was"
+PYTHON_BIN="/root/ticketing-was/venv/bin/python"
+RUNNER_FILE="$BASE_DIR/movie/movie_cache_builder.py"
+LOG_FILE="/var/log/ticketing-movie-cache.log"
+
+attempt=1
+success=0
+
+while [ "$attempt" -le 5 ]; do
+    echo "[$(date '+%F %T')] movie cache warm attempt $attempt using $PYTHON_BIN" >> "$LOG_FILE"
+
+    if cd "$BASE_DIR" && PYTHONPATH="$BASE_DIR" "$PYTHON_BIN" "$RUNNER_FILE" >> "$LOG_FILE" 2>&1; then
+        echo "[$(date '+%F %T')] movie cache warm success on attempt $attempt" >> "$LOG_FILE"
+        success=1
+    else
+        echo "[$(date '+%F %T')] movie cache warm failed on attempt $attempt" >> "$LOG_FILE"
+    fi
+
+    if [ "$attempt" -lt 5 ]; then
+        sleep 60
+    fi
+
+    attempt=$((attempt + 1))
+done
+
+if [ "$success" -eq 1 ]; then
+    exit 0
+fi
+
+exit 1
+WARMSHEOF
+
+chmod +x /usr/local/bin/ticketing_movie_cache_boot_warm.sh
+
+cat > /etc/systemd/system/ticketing-movie-cache-boot-warm.service <<'WARMSVCEOF'
+[Unit]
+Description=Warm movie cache during first 5 minutes after boot
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/mnt/hgfs/ticketing-was
+Environment=PYTHONPATH=/mnt/hgfs/ticketing-was
+ExecStart=/usr/local/bin/ticketing_movie_cache_boot_warm.sh
+RemainAfterExit=no
+User=root
+
+[Install]
+WantedBy=multi-user.target
+WARMSVCEOF
+
+systemctl daemon-reload
+systemctl enable read-api
+systemctl enable write-api
+systemctl enable ticketing-movie-cache-boot-warm.service
+
+cp -f /mnt/hgfs/ticketing-was/read_app.py /mnt/hgfs/ticketing-was/read_app.py.bak
+cp -f /mnt/hgfs/ticketing-was/write_app.py /mnt/hgfs/ticketing-was/write_app.py.bak
+cp -f /mnt/hgfs/ticketing-was/cache/cache_builder.py /mnt/hgfs/ticketing-was/cache/cache_builder.py.bak
+cp -f /mnt/hgfs/ticketing-was/movie/movie_read.py /mnt/hgfs/ticketing-was/movie/movie_read.py.bak
+cp -f /mnt/hgfs/ticketing-was/user/user_read.py /mnt/hgfs/ticketing-was/user/user_read.py.bak
+cp -f /mnt/hgfs/ticketing-was/user/user_write.py /mnt/hgfs/ticketing-was/user/user_write.py.bak
+cp -f /mnt/hgfs/ticketing-was/auth/auth_user_read.py /mnt/hgfs/ticketing-was/auth/auth_user_read.py.bak
+cp -f /mnt/hgfs/ticketing-was/auth/auth_user_write.py /mnt/hgfs/ticketing-was/auth/auth_user_write.py.bak
+cp -f /mnt/hgfs/ticketing-was/inquiry/inquiry_write.py /mnt/hgfs/ticketing-was/inquiry/inquiry_write.py.bak
+cp -f /mnt/hgfs/ticketing-was/review/review_write.py /mnt/hgfs/ticketing-was/review/review_write.py.bak
+
+# 복사 후
+# systemctl restart read-api
+# systemctl restart write-api
+# systemctl restart ticketing-movie-cache-boot-warm.service
+# systemctl status read-api -l --no-pager
+# systemctl status write-api -l --no-pager
+# systemctl status ticketing-movie-cache-boot-warm.service -l --no-pager

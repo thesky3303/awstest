@@ -1,0 +1,115 @@
+1. 기본설정
+vi /etc/selinux/config
+SELINUX=disabled
+
+nmcli connection modify ens160 ipv4.addresses 192.168.10.21/24
+nmcli connection up ens160
+
+2. 패키지 설치
+dnf install -y nginx open-vm-tools open-vm-tools-desktop fuse
+systemctl enable --now nginx
+systemctl enable --now vmtoolsd
+
+3. vm 쉐어 마운트
+mkdir -p /mnt/hgfs/ticketing-web
+vmhgfs-fuse .host:/ticketing-web /mnt/hgfs/ticketing-web -o allow_other
+
+cat >> /etc/fstab <<'EOF'
+.host:/ticketing-web /mnt/hgfs/ticketing-web fuse.vmhgfs-fuse allow_other,defaults 0 0
+EOF
+
+systemctl daemon-reload
+mount -a
+
+4. nginx 설정
+vi /etc/nginx/conf.d/ticketing.conf
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    root /mnt/hgfs/ticketing-web;
+    index index.html;
+
+    location = /favicon.ico {
+        access_log off;
+        log_not_found off;
+        add_header Cache-Control "no-store" always;
+        return 204;
+    }
+
+    location /js/ {
+        expires 10m;
+        add_header Cache-Control "public, max-age=600" always;
+        try_files $uri @js_not_found;
+    }
+
+    location @js_not_found {
+        default_type text/plain;
+        return 404 "JS file not found: $uri\n";
+    }
+
+    location /css/ {
+        expires 10m;
+        add_header Cache-Control "public, max-age=600" always;
+        try_files $uri =404;
+    }
+
+    location /images/ {
+        expires 30m;
+        add_header Cache-Control "public, max-age=1800" always;
+        try_files $uri =404;
+    }
+
+    location / {
+        add_header Cache-Control "no-cache" always;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/read/ {
+        proxy_pass http://192.168.10.22:5000/api/read/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+    }
+
+    location /api/write/ {
+        proxy_pass http://192.168.10.22:5001/api/write/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+    }
+}
+
+5. 최종 확인
+nginx -t
+systemctl restart nginx
+
+
+
+6. cloud flase 배포 설치
+
+curl -fsSL https://pkg.cloudflare.com/cloudflared.repo | tee /etc/yum.repos.d/cloudflared.repo
+dnf clean all
+dnf makecache
+dnf install -y cloudflared
+
+7. curl -I http://localhost:80 확인
+cloudflared tunnel --url http://localhost:80
+
+8. nginx 중복 확인
+curl -s http://127.0.0.1 | head -5
+echo
+curl -s -H 'Host: delegation-graham-tabs-texts.trycloudflare.com' http://127.0.0.1 | head -5
+echo
+nginx -T | grep -nE 'listen|server_name|root'
