@@ -225,6 +225,31 @@ def parse_args():
         default=500,
         help="진행 로그 출력 간격(성공+실패 기준, 기본 500)",
     )
+    p.add_argument(
+        "--wait",
+        dest="wait",
+        action="store_true",
+        help="접수(QUEUED) 후 worker 백그라운드 커밋 완료(OK)까지 폴링해 총 소요를 측정",
+    )
+    p.add_argument(
+        "--no-wait",
+        dest="wait",
+        action="store_false",
+        help="접수(QUEUED)까지만 측정(기존 동작)",
+    )
+    p.set_defaults(wait=True)
+    p.add_argument(
+        "--poll-timeout",
+        type=float,
+        default=float(os.getenv("BURST_POLL_TIMEOUT", "600") or 600),
+        help="--wait 사용 시 booking status 폴링 타임아웃(초, 기본 600)",
+    )
+    p.add_argument(
+        "--poll-workers",
+        type=int,
+        default=int(os.getenv("BURST_POLL_WORKERS", "50") or 50),
+        help="--wait 사용 시 폴링 병렬 워커 수(기본 50)",
+    )
     return p.parse_args()
 
 
@@ -304,24 +329,54 @@ def main():
 
         ok = 0
         fail = 0
+        accepted_refs: list[str] = []
+        accepted_ok = 0
+        accepted_fail = 0
         t_send0 = time.monotonic()
 
         def _one(i: int):
             uid = int(per_msg_uids[i])
             sk = seats[i]
-            code, j = http_w.concert_commit(write_base, uid, sid, [sk], timeout=timeout)
+            # 1) Waiting Room 입장권(permit) 획득
+            code0, j0 = http_w.concert_waiting_room_enter(write_base, uid, sid, timeout=min(10.0, timeout))
+            qref = str((j0 or {}).get("queue_ref") or "")
+            if code0 != 200 or not qref:
+                return False, code0, sk, ""
+
+            permit = ""
+            # 2) 내 순번이 올 때까지 폴링(입장 허가)
+            deadline = time.monotonic() + max(1.0, float(args.poll_timeout))
+            while time.monotonic() < deadline:
+                _, st = http_w.concert_waiting_room_status(write_base, qref, timeout=min(10.0, timeout))
+                if isinstance(st, dict) and st.get("status") == "ADMITTED" and st.get("permit_token"):
+                    permit = str(st.get("permit_token"))
+                    break
+                time.sleep(0.4)
+
+            if not permit:
+                return False, 408, sk, ""
+
+            # 3) permit 포함하여 커밋(이제서야 예매 요청이 접수됨)
+            code, j = http_w.request_json(
+                f"{write_base}/api/write/concerts/booking/commit",
+                "POST",
+                {"user_id": uid, "show_id": sid, "seats": [sk], "permit_token": permit},
+                timeout=timeout,
+            )
             ref = str((j or {}).get("booking_ref") or "")
-            success = (code == 200 and (j or {}).get("ok") and bool(ref))
-            return success, code, sk
+            success = (code == 200 and (j or {}).get("ok") and bool(ref) and str((j or {}).get("code") or "") == "QUEUED")
+            return success, code, sk, ref
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(_one, i) for i in range(total)]
             done = 0
             for fut in as_completed(futures):
-                success, code, seat_key = fut.result()
+                success, code, seat_key, ref = fut.result()
                 done += 1
                 if success:
                     ok += 1
+                    if ref:
+                        accepted_refs.append(ref)
                 else:
                     fail += 1
                     if fail <= 5:
@@ -332,6 +387,50 @@ def main():
                     print(f"progress: {done}/{total} ok={ok} fail={fail} qps={qps:.1f}", file=sys.stderr)
 
         send_sec = time.monotonic() - t_send0
+
+        # --wait: 백그라운드 처리 완료(OK)까지 폴링해 "대기열"이 실제로 보이게 한다.
+        poll_sec = 0.0
+        if args.wait and accepted_refs:
+            poll_workers = max(1, int(args.poll_workers))
+            poll_timeout = max(1.0, float(args.poll_timeout))
+            t_poll0 = time.monotonic()
+
+            def _poll_one(ref: str):
+                result = http_w.poll_booking_status(
+                    write_base,
+                    ref,
+                    kind="concert",
+                    timeout_sec=poll_timeout,
+                    interval_sec=0.4,
+                )
+                ok2 = bool(isinstance(result, dict) and result.get("ok") is True and str(result.get("code") or "") == "OK")
+                return ok2, result
+
+            inflight = len(accepted_refs)
+            print(f"queued: {inflight}개 — worker 백그라운드 처리 대기/진행 중...", file=sys.stderr)
+            with ThreadPoolExecutor(max_workers=poll_workers) as pool2:
+                futs2 = [pool2.submit(_poll_one, r) for r in accepted_refs]
+                done2 = 0
+                for fut in as_completed(futs2):
+                    ok2, result = fut.result()
+                    done2 += 1
+                    if ok2:
+                        accepted_ok += 1
+                    else:
+                        accepted_fail += 1
+                        if accepted_fail <= 5:
+                            code = (result or {}).get("code") if isinstance(result, dict) else None
+                            status = (result or {}).get("status") if isinstance(result, dict) else None
+                            print(f"POLL_FAIL code={code} status={status}", file=sys.stderr)
+                    if done2 % progress_every == 0 or done2 == inflight:
+                        elapsed2 = max(0.001, time.monotonic() - t_poll0)
+                        qps2 = done2 / elapsed2
+                        print(
+                            f"poll: {done2}/{inflight} ok={accepted_ok} fail={accepted_fail} qps={qps2:.1f}",
+                            file=sys.stderr,
+                        )
+            poll_sec = time.monotonic() - t_poll0
+
         summary = {
             "회차_id": sid,
             "공연_id": int(show["concert_id"]),
@@ -349,10 +448,14 @@ def main():
             "HTTP_접수_실패": fail,
             "전송_소요_초": round(send_sec, 3),
             "전송_QPS": round((total / send_sec) if send_sec > 0 else 0.0, 2),
+            "wait": bool(args.wait),
+            "POLL_완료_OK": int(accepted_ok),
+            "POLL_완료_실패": int(accepted_fail),
+            "폴링_소요_초": round(poll_sec, 3),
             "총_소요_초": round(time.monotonic() - t0, 3),
         }
         print(json.dumps(summary, indent=2, ensure_ascii=False))
-        if fail:
+        if fail or (args.wait and accepted_fail):
             sys.exit(1)
     finally:
         conn.close()

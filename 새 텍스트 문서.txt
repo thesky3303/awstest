@@ -2,9 +2,11 @@ kubectl get pods -n ticketing
 kubectl get ingress -n ticketing
 
 
-bash ../scripts/delete.sh
+bash ../scripts/redis-flush-cache.sh
 
 bash ../scripts/img.sh
+
+bash ../scripts/tools-once-setup.sh
 
 bash ../scripts/worker-autoscale-on.sh
 
@@ -18,13 +20,20 @@ kubectl -n ticketing rollout restart deploy/write-api
 kubectl -n ticketing exec -it tools-once -- sh -lc '
 cd /work/ticketing-db/terraform &&
 WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" \
-python3 ../scripts/sqs_load_real_concert.py -n 30000 --spread-users 30000 --via-was'
+python3 ../scripts/sqs_load_real_concert3.py --show-id 8 -E 1 -T 20'
+
 
 
 kubectl -n ticketing exec -it tools-once -- sh -lc '
 cd /work/ticketing-db/terraform &&
 WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" \
-python3 ../scripts/sqs_load_real_concert2.py -n 30000 --spread-users 30000 --via-was'
+python3 ../scripts/sqs_load_real_concert.py -n 1000 --spread-users 1000 --via-was'
+
+
+kubectl -n ticketing exec -it tools-once -- sh -lc '
+cd /work/ticketing-db/terraform &&
+WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" \
+python3 ../scripts/sqs_load_real_concert2.py -n 1000 --spread-users 1000 --via-was'
 
 
 
@@ -39,3 +48,66 @@ python3 ../scripts/sqs_load_real_concert.py -n 30000 --spread-users 30000 --via-
 watch -n 2 'kubectl -n ticketing get deploy read-api write-api worker-svc worker-svc-ui -o wide'
 워커만 조회
  watch -n 2 'kubectl get pods -n ticketing -l "app in (worker-svc,worker-svc-ui)"'
+
+헬름 keda 삭제
+REGION="ap-northeast-2"
+CLUSTER_NAME="ticketing-eks"
+
+aws eks list-clusters --region "$REGION"
+aws eks update-kubeconfig --region "$REGION" --name "$CLUSTER_NAME"
+
+helm uninstall keda -n keda
+
+
+
+
+모니터링팀에게 전달할 “API가 정의된 파일”
+콘서트 Waiting Room 관련 API 라우트 정의: services/ticketing-was/concert/concert_write.py
+
+GET /api/write/concerts/{show_id}/waiting-room/metrics
+POST /api/write/concerts/{show_id}/waiting-room/observe
+POST /api/write/concerts/{show_id}/waiting-room/control
+(참고) POST /api/write/concerts/{show_id}/waiting-room/enter
+(참고) GET /api/write/concerts/waiting-room/status/{queue_ref}
+Waiting Room 로직(카운터/오토/제어/관측 처리): services/ticketing-was/waiting_room.py
+
+Write API 앱에 라우터가 붙는 곳: services/ticketing-was/write_app.py
+
+
+services/ticketing-was/concert/concert_write.py에서 “어디에 어떤 값을 주면 바뀌는지”
+1) 대기열 상태/지표 확인 (값을 “주는” 게 아니라 “보는” API)
+함수: waiting_room_metrics(show_id: int)
+호출: GET /api/write/concerts/{show_id}/waiting-room/metrics
+무슨 값이 나오나: enqueued, admitted, backlog, enter_rps_est, control, observe
+2) 모니터링이 관측치를 “주입” (AUTO가 우선 반영)
+함수: waiting_room_observe(show_id: int, payload: dict)
+호출: POST /api/write/concerts/{show_id}/waiting-room/observe
+payload에 줄 값(예시):
+{ "admit_rate_per_sec": 25 }
+효과: AUTO 모드일 때 초당 입장 허가 인원이 이 값으로 “즉시” 바뀜(단, TTL 동안만 유효)
+3) 운영/모니터링이 정책을 “강제로” 바꿈
+함수: waiting_room_control(show_id: int, payload: dict)
+
+호출: POST /api/write/concerts/{show_id}/waiting-room/control
+
+payload에 줄 수 있는 값
+
+mode: "AUTO" 또는 "MANUAL"
+enabled: true/false (false면 입장 허가 멈춤)
+admit_rate_per_sec: 정수 (MANUAL일 때 고정 속도)
+message: 문자열 (UI에 표시 가능)
+예시 1: 대기열 강제 유지(입장 정지)
+
+{ "enabled": false, "message": "폭주로 인해 잠시 대기 중입니다." }
+예시 2: MANUAL로 전환해서 초당 10명만 입장
+{ "mode": "MANUAL", "enabled": true, "admit_rate_per_sec": 10 }
+예시 3: AUTO로 복귀
+{ "mode": "AUTO", "enabled": true, "message": "" }
+실제 “바뀌는 로직”은 services/ticketing-was/waiting_room.py에 있음
+observe(): observe API로 받은 값을 Redis에 저장(TTL) → AUTO가 우선 사용
+set_control_full(): control API로 받은 값을 Redis에 저장(지속) → mode/enabled/rate/message가 바뀜
+_auto_effective_rate(): AUTO일 때 admit rate를 최종 결정(관측치가 있으면 그 값을 우선)
+즉,
+
+**모니터링이 “수치만 주입”**하고 싶으면 → observe에 {"admit_rate_per_sec": ...}
+**운영이 “정책 자체를 강제”**하고 싶으면 → control에 mode/enabled/admit_rate_per_sec/message 를 주면 됩니다.

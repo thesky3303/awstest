@@ -84,11 +84,19 @@ def _is_excluded_from_booking(movie_row):
 
 
 def _load_movie_cache_rows():
-    cached_data = redis_client.get(MOVIES_LIST_CACHE_KEY)
+    cached_data = None
+    try:
+        cached_data = redis_client.get(MOVIES_LIST_CACHE_KEY)
+    except Exception:
+        cached_data = None
     if cached_data:
         try:
             rows = json.loads(cached_data)
-        except json.JSONDecodeError:
+        except Exception:
+            try:
+                redis_client.delete(MOVIES_LIST_CACHE_KEY)
+            except Exception:
+                pass
             rows = []
     else:
         rows = _fetch_movies_from_db()
@@ -132,18 +140,14 @@ def _fetch_bootstrap_from_db(movie_map):
 
             cur.execute("""
                 SELECT s.schedule_id, s.movie_id, s.hall_id, s.show_date, s.total_count,
-                    GREATEST(0, s.total_count - IFNULL(bs.cnt, 0)) AS remain_count,
+                    -- remain_count는 단일 카운터(DB 컬럼)만 신뢰한다. (재계산/조인으로 만들지 않음)
+                    GREATEST(0, COALESCE(s.remain_count, 0)) AS remain_count,
                     CASE
-                      WHEN GREATEST(0, s.total_count - IFNULL(bs.cnt, 0)) <= 0 THEN 'CLOSED'
+                      WHEN GREATEST(0, COALESCE(s.remain_count, 0)) <= 0 THEN 'CLOSED'
                       WHEN UPPER(COALESCE(s.status, '')) = 'CLOSED' THEN 'CLOSED'
                       ELSE 'OPEN'
                     END AS status
                 FROM schedules s
-                LEFT JOIN (
-                    SELECT schedule_id, COUNT(*) AS cnt FROM booking_seats
-                    WHERE UPPER(COALESCE(status, '')) = 'ACTIVE'
-                    GROUP BY schedule_id
-                ) bs ON bs.schedule_id = s.schedule_id
                 WHERE UPPER(COALESCE(s.status, 'OPEN')) IN ('OPEN', 'CLOSED')
                 ORDER BY s.show_date ASC, s.schedule_id ASC
             """)
@@ -321,12 +325,19 @@ def warmup_theaters_booking_caches():
 
 @router.get("/api/read/theaters/bootstrap")
 def get_theaters_bootstrap():
-    cached_data = redis_client.get(THEATERS_BOOTSTRAP_CACHE_KEY)
+    cached_data = None
+    try:
+        cached_data = redis_client.get(THEATERS_BOOTSTRAP_CACHE_KEY)
+    except Exception:
+        cached_data = None
     if cached_data:
         try:
             return json.loads(cached_data)
-        except json.JSONDecodeError:
-            redis_client.delete(THEATERS_BOOTSTRAP_CACHE_KEY)
+        except Exception:
+            try:
+                redis_client.delete(THEATERS_BOOTSTRAP_CACHE_KEY)
+            except Exception:
+                pass
     payload = _build_bootstrap_payload()
     _write_bootstrap_cache(payload)
     return payload
@@ -346,12 +357,19 @@ def get_theaters_remain_overrides():
 @router.get("/api/read/theater/{theater_id}")
 def get_theater_detail(theater_id: int):
     cache_key = _get_theater_detail_cache_key(theater_id)
-    cached_data = redis_client.get(cache_key)
+    cached_data = None
+    try:
+        cached_data = redis_client.get(cache_key)
+    except Exception:
+        cached_data = None
     if cached_data:
         try:
             return json.loads(cached_data)
-        except json.JSONDecodeError:
-            redis_client.delete(cache_key)
+        except Exception:
+            try:
+                redis_client.delete(cache_key)
+            except Exception:
+                pass
     bootstrap, payload = _bootstrap_and_theater_detail(theater_id)
     if payload is None:
         return JSONResponse(status_code=404, content={"message": "not found"})

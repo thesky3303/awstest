@@ -51,6 +51,171 @@ class _NoopRedisClient:
   def flushdb(self) -> bool:
     return True
 
+  def pipeline(self, *args: Any, **kwargs: Any) -> Any:
+    return self
+
+  def execute(self, *args: Any, **kwargs: Any) -> list:
+    return []
+
+  def smembers(self, key: str) -> set:
+    return set()
+
+  def sadd(self, key: str, *values: Any) -> int:
+    return 0
+
+  def srem(self, key: str, *values: Any) -> int:
+    return 0
+
+  def scard(self, key: str) -> int:
+    return 0
+
+  def sismember(self, key: str, value: Any) -> bool:
+    return False
+
+  def incr(self, key: str) -> int:
+    return 0
+
+  def expire(self, key: str, ttl_seconds: int) -> bool:
+    return True
+
+  def expireat(self, key: str, when: Any) -> bool:
+    return True
+
+  def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any:
+    return None
+
+
+class _SafeRedisPipeline:
+  """
+  Redis가 다운/미설정인 환경에서도 read 경로가 죽지 않게:
+  execute()에서 예외를 삼키고 빈 결과로 처리한다.
+  """
+
+  def __init__(self, inner: Any):
+    self._inner = inner
+
+  def __getattr__(self, name: str) -> Any:
+    return getattr(self._inner, name)
+
+  def execute(self, *args: Any, **kwargs: Any) -> list:
+    try:
+      res = self._inner.execute(*args, **kwargs)
+    except Exception:
+      return []
+    return list(res or [])
+
+
+class _SafeRedisClient:
+  """
+  ElastiCache(또는 Redis)가 없거나 장애일 때도 "캐시 미스"로 취급해
+  호출자가 DB 조회로 폴백하도록 만든다.
+  """
+
+  def __init__(self, inner: Any):
+    self._inner = inner
+
+  def get(self, key: str) -> Optional[str]:
+    try:
+      return self._inner.get(key)
+    except Exception:
+      return None
+
+  def mget(self, keys: Any, *args: Any, **kwargs: Any) -> list:
+    try:
+      res = self._inner.mget(keys, *args, **kwargs)
+      return list(res or [])
+    except Exception:
+      try:
+        n = len(keys)
+      except TypeError:
+        n = 0
+      return [None] * n
+
+  def set(self, key: str, value: Any, *args: Any, **kwargs: Any) -> bool:
+    try:
+      return bool(self._inner.set(key, value, *args, **kwargs))
+    except Exception:
+      return True
+
+  def setex(self, key: str, ttl_seconds: int, value: Any) -> bool:
+    try:
+      return bool(self._inner.setex(key, int(ttl_seconds), value))
+    except Exception:
+      return True
+
+  def delete(self, *keys: Any) -> int:
+    try:
+      return int(self._inner.delete(*keys) or 0)
+    except Exception:
+      return 0
+
+  def flushdb(self) -> bool:
+    try:
+      return bool(self._inner.flushdb())
+    except Exception:
+      return True
+
+  def pipeline(self, *args: Any, **kwargs: Any) -> Any:
+    try:
+      return _SafeRedisPipeline(self._inner.pipeline(*args, **kwargs))
+    except Exception:
+      return _NoopRedisClient()
+
+  def smembers(self, key: str) -> set:
+    try:
+      res = self._inner.smembers(key) or set()
+      return set(res)
+    except Exception:
+      return set()
+
+  def sadd(self, key: str, *values: Any) -> int:
+    try:
+      return int(self._inner.sadd(key, *values) or 0)
+    except Exception:
+      return 0
+
+  def srem(self, key: str, *values: Any) -> int:
+    try:
+      return int(self._inner.srem(key, *values) or 0)
+    except Exception:
+      return 0
+
+  def scard(self, key: str) -> int:
+    try:
+      return int(self._inner.scard(key) or 0)
+    except Exception:
+      return 0
+
+  def sismember(self, key: str, value: Any) -> bool:
+    try:
+      return bool(self._inner.sismember(key, value))
+    except Exception:
+      return False
+
+  def incr(self, key: str) -> int:
+    try:
+      return int(self._inner.incr(key) or 0)
+    except Exception:
+      return 0
+
+  def expire(self, key: str, ttl_seconds: int) -> bool:
+    try:
+      return bool(self._inner.expire(key, int(ttl_seconds)))
+    except Exception:
+      return True
+
+  def expireat(self, key: str, when: Any) -> bool:
+    try:
+      return bool(self._inner.expireat(key, when))
+    except Exception:
+      return True
+
+  def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any:
+    try:
+      return self._inner.eval(script, int(numkeys), *keys_and_args)
+    except Exception:
+      return None
+
 
 if not CACHE_ENABLED:
   # hard bypass: do NOT create a Redis client at all.
@@ -73,4 +238,4 @@ else:
       _pool_kw["health_check_interval"] = REDIS_HEALTH_CHECK_INTERVAL_SEC
 
   _pool = redis.ConnectionPool(**_pool_kw)
-  redis_client = redis.Redis(connection_pool=_pool)
+  redis_client = _SafeRedisClient(redis.Redis(connection_pool=_pool))

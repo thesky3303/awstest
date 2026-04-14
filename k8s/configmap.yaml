@@ -53,8 +53,24 @@ data:
   SQS_POLL_ERROR_BACKOFF_SEC: "3"
   # SQS 수락 후 폴링용 Redis queued 키 TTL(초). 큐 적체 시각보다 길게 두는 것이 안전.
   BOOKING_QUEUED_TTL_SEC: "7200"
+  # 예매 처리 대기열(연출용) 카운터 TTL(초): booking:queue:{type}:{id}:{enq|done}
+  BOOKING_QUEUE_COUNTER_TTL_SEC: "7200"
   # worker 결과 Redis TTL(초). burst 데모에서 처리 완료 후 결과를 충분히 오래 볼 수 있게.
   BOOKING_RESULT_TTL_SEC: "3600"
+
+  # ── 콘서트 좌석 상태/표시 정책 ──────────────────────────────────────────────
+  # 홀드(주황) TTL(초): 처리중 상태가 영구히 남지 않게 하는 최후 안전장치.
+  CONCERT_SEAT_HOLD_TTL_SEC: "600"
+  # 확정(회색) 가드 set fallback TTL(초). 0이면 show_date 기반 EXPIREAT만 사용(권장).
+  CONCERT_CONFIRMED_SET_TTL_SEC: "0"
+  # 확정 가드 set 만료 여유(초): 공연 종료 후 이 시간만큼 남겼다가 자동 삭제.
+  CONCERT_CONFIRMED_SET_GRACE_SEC: "21600"
+  # remain 계산에 WR backlog를 추가 수요로 차감할지(연출용). 기본 false(실제 좌석 기준).
+  CONCERT_REMAIN_SUBTRACT_WR_BACKLOG: "false"
+
+  # ── Waiting Room 카운터 TTL(초) ────────────────────────────────────────────
+  # wr:* 카운터(enq/done/clock/control/observe)는 TTL 없이 누적되면 시연 반복 시 대기열이 튀므로 TTL 권장.
+  WR_COUNTER_TTL_SEC: "7200"
 ---
 # Secrets는 kubectl로 별도 생성:
 # kubectl create secret generic ticketing-secrets \

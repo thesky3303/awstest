@@ -13,6 +13,13 @@ _sync_scripts() {
   echo "Synced $REPO_ROOT/scripts/. -> $NS/$POD:/work/ticketing-db/scripts/"
 }
 
+_ensure_python_deps() {
+  # Running 중인 기존 tools-once Pod를 재사용하는 경우에도,
+  # python 패키지 설치가 누락될 수 있어 매번(멱등) 보장한다.
+  kubectl -n "$NS" exec "$POD" -- python -m pip install -q --upgrade "pip>=26,<27"
+  kubectl -n "$NS" exec "$POD" -- python -m pip install -q boto3 pymysql redis
+}
+
 _need_fresh_pod() {
   if ! kubectl -n "$NS" get pod "$POD" &>/dev/null; then
     return 0
@@ -25,6 +32,7 @@ _need_fresh_pod() {
 
 if ! _need_fresh_pod; then
   _sync_scripts
+  _ensure_python_deps
   exit 0
 fi
 
@@ -79,5 +87,4 @@ if [ "$i" -ge "$max" ]; then
 fi
 
 _sync_scripts
-kubectl -n "$NS" exec "$POD" -- python -m pip install -q --upgrade "pip>=26,<27"
-kubectl -n "$NS" exec "$POD" -- pip install -q boto3 pymysql redis
+_ensure_python_deps

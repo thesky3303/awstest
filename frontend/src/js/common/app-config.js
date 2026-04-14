@@ -15,6 +15,9 @@
   runtime.__prefetchedScriptSet = prefetchedScriptSet;
   runtime.__modalState = modalState;
 
+  /** 배포 직후 S3·ALB·브라우저 캐시 불일치 시 /api/* 가 잘못된 오리진으로 나가는 레이스 완화 */
+  let ticketingEndpointsLoadPromise = null;
+
   runtime.constants = {
     loginStorageKey: 'loginUser',
     rememberedLoginIdKey: 'rememberedLoginId',
@@ -323,12 +326,20 @@
     window.scrollTo(0, modalState.savedScrollY || 0);
   }
 
-  /** ALB 호스트만 적힌 값에 http:// 보강 (상대 URL로 잘못 붙는 것 방지). */
+  /** ALB 호스트만 적힌 값에 http:// 보강 후, scheme+host(+port)만 남김(경로/쿼리 붙은 잘못된 설정 방지). */
   function normalizeTicketingApiOrigin(raw) {
-    const s = String(raw || '').trim().replace(/\/$/, '');
+    const s = String(raw || '').trim();
     if (!s) return '';
-    if (/^https?:\/\//i.test(s)) return s;
-    return `http://${s}`;
+    let full = s.replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(full)) {
+      full = `http://${full}`;
+    }
+    try {
+      const u = new URL(full);
+      return `${u.protocol}//${u.host}`;
+    } catch (e) {
+      return full.replace(/\/+$/, '');
+    }
   }
 
   /**
@@ -343,6 +354,39 @@
    * Cognito: window.__TICKETING_AUTH_BEARER_TOKEN__ 에 access token 넣으면 requestJson이 Authorization 자동 첨부(비어 있으면 무변화).
    */
   async function ensureTicketingEndpointsLoaded() {
+    if (ticketingEndpointsLoadPromise) {
+      return ticketingEndpointsLoadPromise;
+    }
+    ticketingEndpointsLoadPromise = (async () => {
+      try {
+        const res = await fetch(`/api-origin.js?__t=${Date.now()}`, {
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'same-origin'
+        });
+        if (!res.ok) return;
+        const text = await res.text();
+        const m = text.match(/__TICKETING_API_ORIGIN__\s*=\s*"([^"]*)"/);
+        if (m && String(m[1] || '').trim()) {
+          window.__TICKETING_API_ORIGIN__ = normalizeTicketingApiOrigin(m[1]);
+        }
+      } catch (e) {
+        /* 로컬 등 api-origin 없음 — 상대 /api 만 사용 */
+      }
+      await new Promise((r) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => r());
+        } else {
+          setTimeout(r, 0);
+        }
+      });
+    })();
+    try {
+      await ticketingEndpointsLoadPromise;
+    } catch (e) {
+      ticketingEndpointsLoadPromise = null;
+      throw e;
+    }
     return undefined;
   }
 
@@ -415,15 +459,18 @@
     const resolvedPath = resolveTicketingApiUrl(url);
     const method = String(opts.method || 'GET').toUpperCase();
     const headers = { ...(opts.headers || {}) };
-    try {
-      const tok = typeof window.__TICKETING_AUTH_BEARER_TOKEN__ === 'string'
-        ? window.__TICKETING_AUTH_BEARER_TOKEN__.trim()
-        : '';
-      if (tok && !headers.Authorization && !headers.authorization) {
-        headers.Authorization = `Bearer ${tok}`;
+    const noAuth = opts && opts.noAuth === true;
+    if (!noAuth) {
+      try {
+        const tok = typeof window.__TICKETING_AUTH_BEARER_TOKEN__ === 'string'
+          ? window.__TICKETING_AUTH_BEARER_TOKEN__.trim()
+          : '';
+        if (tok && !headers.Authorization && !headers.authorization) {
+          headers.Authorization = `Bearer ${tok}`;
+        }
+      } catch (e) {
+        /* ignore */
       }
-    } catch (e) {
-      /* ignore */
     }
     // GET/HEAD with Content-Type: application/json triggers a CORS preflight; ALB/배포 이슈 시 OPTIONS가
     // ACAO 없이 실패할 수 있어, 본문 없는 읽기 요청은 simple request로 보냄 (응답 CORS는 그대로 검사됨).

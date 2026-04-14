@@ -207,6 +207,7 @@
                 <div class="theaters-detail-confirm-row"><span>인원</span><strong class="theaters-detail-confirm-count"></strong></div>
                 <div class="theaters-detail-confirm-row"><span>결제금액</span><strong class="theaters-detail-confirm-price"></strong></div>
               </div>
+              <div class="theaters-detail-queue" hidden aria-live="polite"></div>
               <div class="theaters-detail-confirm-ask-row">
                 <div class="theaters-detail-confirm-ask">결제를 진행하시겠습니까?</div>
                 <button type="button" class="theaters-detail-reselect">좌석 재선택</button>
@@ -251,6 +252,7 @@
     const confirmPrice = overlay.querySelector('.theaters-detail-confirm-price');
     const resultMessage = overlay.querySelector('.theaters-detail-result-message');
     const reselectButton = overlay.querySelector('.theaters-detail-reselect');
+    const queueNode = overlay.querySelector('.theaters-detail-queue');
 
     function updateSummary() {
       const seatLabels = Array.from(selectedSeats).map((seatKey) => {
@@ -427,6 +429,10 @@
 
         submitButton.disabled = true;
         submitButton.textContent = '처리 중...';
+        if (queueNode) {
+          queueNode.hidden = true;
+          queueNode.textContent = '';
+        }
 
         try {
           const commit = await requestBooking({
@@ -447,7 +453,25 @@
             const ref = encodeURIComponent(String(commit.booking_ref).trim());
             result = await pollAsyncBookingStatus(`/booking/status/${ref}`, {
               timeoutSec: 600,
-              intervalMs: 400
+              intervalMs: 400,
+              onProgress(status) {
+                const q = status && status.queue ? status.queue : null;
+                const position = q && Number.isFinite(Number(q.position)) ? Number(q.position) : 0;
+                const ahead = q && Number.isFinite(Number(q.ahead)) ? Number(q.ahead) : Math.max(0, position - 1);
+                if (queueNode) {
+                  queueNode.hidden = false;
+                  if (position > 0) {
+                    queueNode.textContent = `대기열 ${position}번째 (앞에 ${ahead}명)`;
+                  } else {
+                    queueNode.textContent = '대기열 진입 중…';
+                  }
+                }
+                if (position > 0) {
+                  submitButton.textContent = `대기열 ${position}번째…`;
+                } else {
+                  submitButton.textContent = '예매 처리 중…';
+                }
+              }
             });
           }
 

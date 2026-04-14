@@ -18,6 +18,7 @@ import redis
 import pymysql
 import time
 import threading
+import random
 from botocore.config import Config
 
 logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(message)s")
@@ -57,6 +58,27 @@ def _get_bool(name: str, default: bool) -> bool:
     return default
 
 
+# ── Demo: optional artificial delay (OFF by default) ──────────────────────────
+# 목적: 시연에서 큐(backlog)를 일부러 만들어 "처리중(주황)" 연출을 보기 쉽게 함.
+# 원칙: 기본은 OFF. 환경변수로만 ON.
+WORKER_DEMO_DELAY_ENABLED = _get_bool("WORKER_DEMO_DELAY_ENABLED", False)
+WORKER_DEMO_DELAY_MS = _get_int("WORKER_DEMO_DELAY_MS", 0, 0)
+WORKER_DEMO_DELAY_JITTER_MS = _get_int("WORKER_DEMO_DELAY_JITTER_MS", 0, 0)
+
+
+def _maybe_sleep_demo_delay() -> None:
+    if not WORKER_DEMO_DELAY_ENABLED:
+        return
+    base = int(WORKER_DEMO_DELAY_MS)
+    jitter = int(WORKER_DEMO_DELAY_JITTER_MS)
+    if base <= 0 and jitter <= 0:
+        return
+    extra = random.randint(0, max(0, jitter)) if jitter > 0 else 0
+    ms = max(0, base + extra)
+    if ms > 0:
+        time.sleep(ms / 1000.0)
+
+
 # ticketing-was/config.py 와 동일 규칙: SQS URL 이 있으면 예매 상태 ElastiCache 필수 → 자동 True
 BOOKING_STATE_ENABLED = _get_bool("BOOKING_STATE_ENABLED", True)
 if SQS_QUEUE_URL:
@@ -76,7 +98,6 @@ THEATERS_BOOTSTRAP_CACHE_KEY = "theaters:booking:bootstrap:v6"
 
 def _theaters_detail_cache_key(theater_id: int) -> str:
     return f"theaters:booking:detail:{int(theater_id)}:v6"
-
 
 _pool_kw = {
     "host": REDIS_HOST,
@@ -101,6 +122,13 @@ _booking_pool_kw = {**_pool_kw, "db": ELASTICACHE_LOGICAL_DB_BOOKING}
 
 # booking:result TTL(초) — 큐 적체/지연이 길 때도 결과 조회가 가능하도록 기본을 넉넉히 둔다.
 BOOKING_RESULT_TTL_SEC = _get_int("BOOKING_RESULT_TTL_SEC", 3600, 60)
+# booking queue(연출용) 카운터 TTL(초). write-api BOOKING_QUEUE_COUNTER_TTL_SEC 와 동일 값 권장.
+BOOKING_QUEUE_COUNTER_TTL_SEC = _get_int("BOOKING_QUEUE_COUNTER_TTL_SEC", 7200, 60)
+# 콘서트 확정(회색) 좌석 Redis set TTL 정책:
+# - 기본: 공연 종료(show_date) + grace 초에 EXPIREAT
+# - show_date를 못 얻으면 fallback TTL(초) 사용 (0이면 만료 없음)
+CONCERT_CONFIRMED_SET_FALLBACK_TTL_SEC = _get_int("CONCERT_CONFIRMED_SET_TTL_SEC", 0, 0)
+CONCERT_CONFIRMED_SET_GRACE_SEC = _get_int("CONCERT_CONFIRMED_SET_GRACE_SEC", 6 * 3600, 0)
 
 
 class _NoopBookingRedis:
@@ -284,7 +312,11 @@ def _booking_queued_key(booking_ref: str) -> str:
     return f"booking:queued:{booking_ref}"
 
 
-def store_result(booking_ref, result):
+def _queue_done_counter_key(booking_type: str, entity_id: int) -> str:
+    return f"booking:queue:{str(booking_type)}:{int(entity_id)}:done"
+
+
+def store_result(booking_ref, result, *, booking_type: str | None = None, entity_id: int | None = None):
     """ElastiCache booking 논리 DB에 결과 저장(write-api 폴링). 완료 시 queued 제거."""
     key = _booking_result_key(booking_ref)
     elasticache_booking_client.setex(key, int(BOOKING_RESULT_TTL_SEC), json.dumps(result, default=str))
@@ -292,7 +324,183 @@ def store_result(booking_ref, result):
         elasticache_booking_client.delete(_booking_queued_key(booking_ref))
     except Exception:
         log.debug("booking queued 키 삭제 실패(무시)", exc_info=True)
+    if booking_type and entity_id and int(entity_id) > 0:
+        try:
+            k = _queue_done_counter_key(str(booking_type), int(entity_id))
+            elasticache_booking_client.incr(k)
+            # 연출용 카운터는 오픈/런 단위로 자연 만료(누적 방지)
+            try:
+                ttl = int(BOOKING_QUEUE_COUNTER_TTL_SEC)
+                if ttl > 0:
+                    elasticache_booking_client.expire(k, ttl)
+            except Exception:
+                pass
+        except Exception:
+            log.debug("queue done counter incr 실패(무시) type=%s entity_id=%s", booking_type, entity_id, exc_info=True)
     log.info("결과 저장: %s", key)
+
+
+# ── 콘서트 홀드 종료(점유/원복) ────────────────────────────────────────────────
+def _concert_seat_key(show_id: int, row: int, col: int) -> str:
+    return f"concert:seat:{int(show_id)}:{int(row)}-{int(col)}:hold:v1"
+
+
+def _concert_reserved_set_key(show_id: int) -> str:
+    # legacy (확정/홀드 혼용) — 현재는 hold 전용 set을 사용한다.
+    return f"concert:reserved:{int(show_id)}:v1"
+
+
+def _concert_hold_set_key(show_id: int) -> str:
+    return f"concert:hold:{int(show_id)}:v1"
+
+
+def _concert_hold_meta_key(booking_ref: str) -> str:
+    return f"concert:holdmeta:{booking_ref}:v1"
+
+def _concert_confirmed_set_key(show_id: int) -> str:
+    return f"concert:confirmed:{int(show_id)}:v1"
+
+def _concert_pending_key(show_id: int) -> str:
+    return f"concert:show:{int(show_id)}:pending:v1"
+
+
+def _concert_remain_key(show_id: int) -> str:
+    # remain 단일 카운터(단일 진실)
+    return f"concert:show:{int(show_id)}:remain:v1"
+
+
+_PENDING_ADJUST_LUA = """
+local v = redis.call('INCRBY', KEYS[1], tonumber(ARGV[1]))
+if v < 0 then
+  redis.call('SET', KEYS[1], 0)
+  v = 0
+end
+return v
+"""
+
+
+def _adjust_concert_pending(show_id: int, delta: int) -> None:
+    d = _to_int(delta, 0)
+    if show_id <= 0 or d == 0:
+        return
+
+
+def _adjust_concert_remain(show_id: int, delta: int) -> None:
+    d = _to_int(delta, 0)
+    if show_id <= 0 or d == 0:
+        return
+    try:
+        elasticache_read_cache_client.eval(_PENDING_ADJUST_LUA, 1, _concert_remain_key(int(show_id)), int(d))
+    except Exception:
+        return
+    try:
+        elasticache_read_cache_client.eval(_PENDING_ADJUST_LUA, 1, _concert_pending_key(int(show_id)), int(d))
+    except Exception:
+        # pending은 UX/연출 + 빠른 remain 반영용. 실패해도 예매 정합성(DB)에는 영향 없음.
+        return
+
+def _to_epoch_seconds(dt_like) -> int:
+    """
+    pymysql DATETIME → epoch seconds (local tz naive는 서버 로컬 기준으로 처리).
+    실패하면 0.
+    """
+    try:
+        import datetime as _dt
+
+        if isinstance(dt_like, _dt.datetime):
+            return int(dt_like.timestamp())
+        if isinstance(dt_like, _dt.date):
+            return int(_dt.datetime(dt_like.year, dt_like.month, dt_like.day).timestamp())
+        # string fallback
+        s = str(dt_like or "").strip().replace("T", " ")
+        if not s:
+            return 0
+        # accept "YYYY-MM-DD HH:MM:SS"
+        base = s[:19]
+        parsed = _dt.datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
+        return int(parsed.timestamp())
+    except Exception:
+        return 0
+
+
+def _finalize_concert_hold_by_ref(booking_ref: str, *, restore_remain: bool) -> int:
+    """
+    write-api에서 잡아둔 Redis 홀드를 worker 처리 완료 시점에 정리한다.
+    요구사항:
+    1) 백그라운드 처리중: reserved set에 들어간 좌석은 회색(예약불가) + remain 감소에 즉시 반영
+    2) DB write 실패(중복좌석/오류 등): hold를 풀어 원복(회색 해제 + remain 회복)
+    3) DB write 성공: 좌석은 "확정" 상태이므로 회색/감소는 유지. (DB ACTIVE가 최종 근거)
+       → 이때는 seat hold key/meta만 정리하고 reserved set membership은 유지한다.
+    """
+    ref = str(booking_ref or "").strip()
+    if not ref:
+        return
+    try:
+        raw = elasticache_read_cache_client.get(_concert_hold_meta_key(ref))
+    except Exception:
+        return
+    if not raw:
+        return
+    try:
+        meta = json.loads(raw)
+    except Exception:
+        return
+    try:
+        show_id = int(meta.get("show_id") or 0)
+    except Exception:
+        show_id = 0
+    if show_id <= 0:
+        return
+    seats = meta.get("seats") or []
+    parsed = []
+    for s in seats:
+        p = _parse_seat_key(s)
+        if p:
+            parsed.append(p)
+    if not parsed:
+        try:
+            elasticache_read_cache_client.delete(_concert_hold_meta_key(ref))
+        except Exception:
+            pass
+        return 0
+
+    # 내가 잡은 홀드만 정리(booking_ref 일치 확인 후)
+    released = 0
+    try:
+        pipe = elasticache_read_cache_client.pipeline()
+        for r, c in parsed:
+            pipe.get(_concert_seat_key(show_id, r, c))
+        existing = pipe.execute()
+
+        pipe2 = elasticache_read_cache_client.pipeline()
+        set_key = _concert_hold_set_key(show_id)
+        for (r, c), v in zip(parsed, existing):
+            if str(v or "") == ref:
+                pipe2.delete(_concert_seat_key(show_id, r, c))
+                # 성공/실패 모두 hold set에서는 제거 (주황 해제)
+                pipe2.srem(set_key, f"{int(r)}-{int(c)}")
+                released += 1
+        pipe2.delete(_concert_hold_meta_key(ref))
+        pipe2.execute()
+        # 홀드 집합 변경 → read-api 경량 폴링(hold_rev)이 한 번에 따라오게
+        try:
+            elasticache_read_cache_client.incr(f"concert:show:{int(show_id)}:hold_rev:v1")
+        except Exception:
+            pass
+    except Exception:
+        return 0
+
+    # 좌석/잔여가 바뀌었으니 회차 스냅샷 무효화(성공/실패 모두)
+    try:
+        elasticache_read_cache_client.delete(f"concert:show:{int(show_id)}:read:v2")
+    except Exception:
+        pass
+
+    # 실패/취소/만료 등으로 롤백이면 remain 복구
+    if restore_remain and released > 0:
+        _adjust_concert_remain(int(show_id), int(released))
+
+    return int(released)
 
 
 def _handle_one_sqs_message(msg: dict) -> bool:
@@ -339,6 +547,7 @@ def _handle_one_sqs_message(msg: dict) -> bool:
         t_sem = time.monotonic()
         with _db_sem:
             sem_wait_ms = (time.monotonic() - t_sem) * 1000.0
+            _maybe_sleep_demo_delay()
             if booking_type == "concert":
                 process_concert_booking(body)
             else:
@@ -380,7 +589,7 @@ def process_theater_booking(body):
             )
             schedule = cur.fetchone()
             if not schedule:
-                store_result(booking_ref, {"ok": False, "code": "NOT_FOUND"})
+                store_result(booking_ref, {"ok": False, "code": "NOT_FOUND"}, booking_type="theater", entity_id=schedule_id)
                 return
 
             theater_id_for_cache = _to_int(schedule.get("theater_id"))
@@ -396,7 +605,7 @@ def process_theater_booking(body):
                 seat_row = cur.fetchone()
                 if not seat_row:
                     conn.rollback()
-                    store_result(booking_ref, {"ok": False, "code": "INVALID_SEAT"})
+                    store_result(booking_ref, {"ok": False, "code": "INVALID_SEAT"}, booking_type="theater", entity_id=schedule_id)
                     return
                 seat_ids.append(_to_int(seat_row.get("seat_id")))
 
@@ -407,7 +616,7 @@ def process_theater_booking(body):
             )
             if cur.rowcount != 1:
                 conn.rollback()
-                store_result(booking_ref, {"ok": False, "code": "SOLD_OUT"})
+                store_result(booking_ref, {"ok": False, "code": "SOLD_OUT"}, booking_type="theater", entity_id=schedule_id)
                 return
 
             cur.execute(
@@ -454,14 +663,14 @@ def process_theater_booking(body):
             "ok": True, "code": "OK",
             "booking_id": booking_id, "booking_code": booking_code,
             "payment_id": payment_id, "remain_count_after": remain_count_after,
-        })
+        }, booking_type="theater", entity_id=schedule_id)
 
     except pymysql.err.IntegrityError:
         conn.rollback()
-        store_result(booking_ref, {"ok": False, "code": "DUPLICATE_SEAT"})
+        store_result(booking_ref, {"ok": False, "code": "DUPLICATE_SEAT"}, booking_type="theater", entity_id=schedule_id)
     except Exception as e:
         conn.rollback()
-        store_result(booking_ref, {"ok": False, "code": "ERROR", "message": str(e)})
+        store_result(booking_ref, {"ok": False, "code": "ERROR", "message": str(e)}, booking_type="theater", entity_id=schedule_id)
         log.error("극장 예매 처리 실패: %s", e)
     finally:
         conn.close()
@@ -484,6 +693,8 @@ def process_concert_booking(body):
     user_id = _to_int(body["user_id"])
     show_id = _to_int(body["show_id"])
     seats = body.get("seats") or []
+    pending_count = _to_int(body.get("pending_count"), 0)
+    hold_applied = bool(body.get("hold_applied") is True)
 
     parsed_seats = [_parse_seat_key(s) for s in seats]
     parsed_seats = [s for s in parsed_seats if s]
@@ -493,7 +704,7 @@ def process_concert_booking(body):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT show_id, concert_id, seat_rows, seat_cols, "
+                "SELECT show_id, concert_id, show_date, seat_rows, seat_cols, "
                 "total_count, remain_count, status "
                 "FROM concert_shows WHERE show_id = %s",
                 (show_id,),
@@ -501,7 +712,11 @@ def process_concert_booking(body):
             show = cur.fetchone()
             if not show:
                 conn.rollback()
-                store_result(booking_ref, {"ok": False, "code": "NOT_FOUND"})
+                store_result(booking_ref, {"ok": False, "code": "NOT_FOUND"}, booking_type="concert", entity_id=show_id)
+                # 홀드가 남지 않도록 정리(회차가 사라진 비정상 케이스)
+                _finalize_concert_hold_by_ref(booking_ref, restore_remain=True)
+                if pending_count > 0:
+                    _adjust_concert_remain(show_id, pending_count)
                 return
 
             seat_rows = _to_int(show.get("seat_rows"))
@@ -510,7 +725,8 @@ def process_concert_booking(body):
             for row_no, col_no in parsed_seats:
                 if row_no > seat_rows or col_no > seat_cols:
                     conn.rollback()
-                    store_result(booking_ref, {"ok": False, "code": "INVALID_SEAT"})
+                    store_result(booking_ref, {"ok": False, "code": "INVALID_SEAT"}, booking_type="concert", entity_id=show_id)
+                    _finalize_concert_hold_by_ref(booking_ref)
                     return
 
             cur.execute(
@@ -552,19 +768,48 @@ def process_concert_booking(body):
             )
             payment_id = cur.lastrowid
 
-            cur.execute("SELECT remain_count FROM concert_shows WHERE show_id = %s", (show_id,))
-            remain_row = cur.fetchone()
-            remain_count_after = _to_int(remain_row.get("remain_count") if remain_row else 0)
-
-            # remain_count/status는 동시성 경로에서 더 이상 강하게 유지하지 않는다.
-            # UI/조회는 show 스냅샷에서 reserved_seats 수로 remain을 유도하도록(read-cache) 맞춘다.
+            # remain 단일 카운터를 신뢰한다. (DB 좌석 COUNT로 재계산하지 않음)
+            # - hold_applied=True: write-api에서 이미 remain이 차감됨 → 성공 시 remain 변화 없음
+            # - hold_applied=False & pending_count>0: enqueue 시 remain 차감됨 → 성공 시 변화 없음
+            # - 그 외(예외 경로)에서도 worker에서 remain을 재계산/덮어쓰지 않는다.
+            try:
+                raw_remain = elasticache_read_cache_client.get(_concert_remain_key(show_id))
+                remain_count_after = _to_int(raw_remain, 0)
+            except Exception:
+                remain_count_after = 0
+            if remain_count_after <= 0:
+                cur.execute("UPDATE concert_shows SET status = 'CLOSED' WHERE show_id = %s", (show_id,))
+            else:
+                cur.execute("UPDATE concert_shows SET status = 'OPEN' WHERE show_id = %s", (show_id,))
 
         conn.commit()
+        # DB 커밋 성공 좌석을 confirmed set에 기록 + 공연 종료 후 자동 만료
+        try:
+            confirmed_key = _concert_confirmed_set_key(show_id)
+            pipec = elasticache_read_cache_client.pipeline()
+            for r, c in parsed_seats:
+                pipec.sadd(confirmed_key, f"{int(r)}-{int(c)}")
+            show_date_epoch = _to_epoch_seconds(show.get("show_date"))
+            exp_at = 0
+            if show_date_epoch > 0:
+                exp_at = int(show_date_epoch) + int(CONCERT_CONFIRMED_SET_GRACE_SEC)
+            elif int(CONCERT_CONFIRMED_SET_FALLBACK_TTL_SEC) > 0:
+                exp_at = int(time.time()) + int(CONCERT_CONFIRMED_SET_FALLBACK_TTL_SEC)
+            if exp_at > 0:
+                pipec.expireat(confirmed_key, exp_at)
+            pipec.execute()
+        except Exception:
+            pass
         store_result(booking_ref, {
             "ok": True, "code": "OK",
             "booking_id": booking_id, "booking_code": booking_code,
             "payment_id": payment_id, "remain_count_after": remain_count_after,
-        })
+        }, booking_type="concert", entity_id=show_id)
+        _finalize_concert_hold_by_ref(booking_ref, restore_remain=False)
+        # pending 선차감(홀드 없이 큐로만 차감된 경우)을 처리 완료 시점에 정리한다.
+        # 성공이면 confirmed/DB가 remain 감소를 유지하므로 pending은 내려야 중복 차감이 없다.
+        if pending_count > 0:
+            _adjust_concert_pending(show_id, -pending_count)
 
         # 콘서트: 회차 스냅샷(+레거시 부트스트랩)만 무효화. 목록/공연상세는 매 티켓마다 지우지 않음.
         try:
@@ -579,10 +824,20 @@ def process_concert_booking(body):
 
     except pymysql.err.IntegrityError:
         conn.rollback()
-        store_result(booking_ref, {"ok": False, "code": "DUPLICATE_SEAT"})
+        store_result(booking_ref, {"ok": False, "code": "DUPLICATE_SEAT"}, booking_type="concert", entity_id=show_id)
+        _finalize_concert_hold_by_ref(booking_ref, restore_remain=True)
+        if pending_count > 0:
+            _adjust_concert_remain(show_id, pending_count)
+        if pending_count > 0:
+            _adjust_concert_pending(show_id, -pending_count)
     except Exception as e:
         conn.rollback()
-        store_result(booking_ref, {"ok": False, "code": "ERROR", "message": str(e)})
+        store_result(booking_ref, {"ok": False, "code": "ERROR", "message": str(e)}, booking_type="concert", entity_id=show_id)
+        _finalize_concert_hold_by_ref(booking_ref, restore_remain=True)
+        if pending_count > 0:
+            _adjust_concert_remain(show_id, pending_count)
+        if pending_count > 0:
+            _adjust_concert_pending(show_id, -pending_count)
         log.error("콘서트 예매 처리 실패: %s", e)
     finally:
         conn.close()

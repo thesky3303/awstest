@@ -96,10 +96,14 @@ function isTerminalAsyncBookingStatus(j) {
 async function pollAsyncBookingStatus(statusPath, options) {
   const timeoutSec = options && Number(options.timeoutSec) > 0 ? Number(options.timeoutSec) : 120;
   const intervalMs = options && Number(options.intervalMs) > 0 ? Number(options.intervalMs) : 400;
+  const onProgress = options && typeof options.onProgress === 'function' ? options.onProgress : null;
   const deadline = Date.now() + timeoutSec * 1000;
   let last = {};
   while (Date.now() < deadline) {
     last = await writeApi(statusPath, 'GET', null, { cache: 'no-store' });
+    if (onProgress && last && last.status === 'PROCESSING') {
+      try { onProgress(last); } catch (e) { /* ignore */ }
+    }
     if (isTerminalAsyncBookingStatus(last)) {
       return last;
     }

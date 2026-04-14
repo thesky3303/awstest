@@ -35,3 +35,11 @@ spec:
                 name: read-api
                 port:
                   number: 5000
+          # ALB 기본 503( CORS 없음 ) 방지: 잘못된 루트 요청·프리로드 등이 /?query 로 들어와도 read-api가 응답하도록
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: read-api
+                port:
+                  number: 5000

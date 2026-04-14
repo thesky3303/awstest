@@ -14,9 +14,19 @@ router = APIRouter()
 
 def _get_movie_detail_payload(movie_id: int):
     cache_key = _get_movie_detail_cache_key(movie_id)
-    cached_data = redis_client.get(cache_key)
+    cached_data = None
+    try:
+        cached_data = redis_client.get(cache_key)
+    except Exception:
+        cached_data = None
     if cached_data:
-        return json.loads(cached_data)
+        try:
+            return json.loads(cached_data)
+        except Exception:
+            try:
+                redis_client.delete(cache_key)
+            except Exception:
+                pass
     result = _fetch_movie_detail_from_db(movie_id)
     if result is None:
         return None
@@ -26,9 +36,19 @@ def _get_movie_detail_payload(movie_id: int):
 
 @router.get("/api/read/movies")
 def get_movies():
-    cached_data = redis_client.get(MOVIES_LIST_CACHE_KEY)
+    cached_data = None
+    try:
+        cached_data = redis_client.get(MOVIES_LIST_CACHE_KEY)
+    except Exception:
+        cached_data = None
     if cached_data:
-        return json.loads(cached_data)
+        try:
+            return json.loads(cached_data)
+        except Exception:
+            try:
+                redis_client.delete(MOVIES_LIST_CACHE_KEY)
+            except Exception:
+                pass
     rows = _fetch_movies_from_db()
     _write_movies_cache(rows)
     return rows

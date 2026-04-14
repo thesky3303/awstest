@@ -79,20 +79,15 @@ def _fetch_movies_from_db():
                     m.release_date, m.synopsis, m.synopsis_line, m.status, m.hide,
                     MIN(CASE
                         WHEN UPPER(COALESCE(s.status, '')) = 'OPEN'
-                             AND GREATEST(0, s.total_count - IFNULL(bs.cnt, 0)) > 0
+                             AND GREATEST(0, COALESCE(s.remain_count, 0)) > 0
                         THEN s.show_date END) AS next_show_date,
                     SUM(CASE
                         WHEN UPPER(COALESCE(s.status, '')) = 'OPEN'
-                             AND GREATEST(0, s.total_count - IFNULL(bs.cnt, 0)) > 0
-                        THEN GREATEST(0, s.total_count - IFNULL(bs.cnt, 0)) ELSE 0 END
+                             AND GREATEST(0, COALESCE(s.remain_count, 0)) > 0
+                        THEN GREATEST(0, COALESCE(s.remain_count, 0)) ELSE 0 END
                     ) AS total_remain_count
                 FROM movies m
                 LEFT JOIN schedules s ON m.movie_id = s.movie_id
-                LEFT JOIN (
-                    SELECT schedule_id, COUNT(*) AS cnt FROM booking_seats
-                    WHERE UPPER(COALESCE(status, '')) = 'ACTIVE'
-                    GROUP BY schedule_id
-                ) bs ON bs.schedule_id = s.schedule_id
                 WHERE m.hide = 'N'
                   AND (m.status = 'ACTIVE' OR m.title LIKE '더미데이터%%' OR m.synopsis LIKE '더미데이터%%')
                 GROUP BY m.movie_id, m.title, m.genre, m.director, m.runtime_minutes,
@@ -123,18 +118,13 @@ def _fetch_movie_detail_from_db(movie_id):
                 return None
             cur.execute("""
                 SELECT s.schedule_id, s.show_date, s.total_count,
-                    GREATEST(0, s.total_count - IFNULL(bs.cnt, 0)) AS remain_count,
+                    GREATEST(0, COALESCE(s.remain_count, 0)) AS remain_count,
                     CASE
-                      WHEN GREATEST(0, s.total_count - IFNULL(bs.cnt, 0)) <= 0 THEN 'CLOSED'
+                      WHEN GREATEST(0, COALESCE(s.remain_count, 0)) <= 0 THEN 'CLOSED'
                       WHEN UPPER(COALESCE(s.status, '')) = 'CLOSED' THEN 'CLOSED'
                       ELSE 'OPEN'
                     END AS status
                 FROM schedules s
-                LEFT JOIN (
-                    SELECT schedule_id, COUNT(*) AS cnt FROM booking_seats
-                    WHERE UPPER(COALESCE(status, '')) = 'ACTIVE'
-                    GROUP BY schedule_id
-                ) bs ON bs.schedule_id = s.schedule_id
                 WHERE s.movie_id = %s ORDER BY s.show_date ASC
             """, (movie_id,))
             schedules = cur.fetchall()

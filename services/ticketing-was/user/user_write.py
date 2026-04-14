@@ -150,6 +150,32 @@ def _refund_concert_booking(user_id: int, booking_id: int):
                 (booking_id,),
             )
 
+            # DB remain_count/status 동기화: ACTIVE 좌석 수 기반으로 재계산
+            if show_id > 0:
+                cur.execute(
+                    """
+                    UPDATE concert_shows cs
+                    SET cs.remain_count = GREATEST(
+                        0,
+                        cs.total_count - (
+                            SELECT COUNT(*)
+                            FROM concert_booking_seats cbs
+                            WHERE cbs.show_id = cs.show_id
+                              AND UPPER(COALESCE(cbs.status, '')) = 'ACTIVE'
+                        )
+                    )
+                    WHERE cs.show_id = %s
+                    """,
+                    (int(show_id),),
+                )
+                cur.execute("SELECT remain_count FROM concert_shows WHERE show_id = %s", (int(show_id),))
+                row = cur.fetchone() or {}
+                remain_after = _to_int(row.get("remain_count"))
+                if remain_after <= 0:
+                    cur.execute("UPDATE concert_shows SET status = 'CLOSED' WHERE show_id = %s", (int(show_id),))
+                else:
+                    cur.execute("UPDATE concert_shows SET status = 'OPEN' WHERE show_id = %s", (int(show_id),))
+
         conn.commit()
     except Exception as exc:
         conn.rollback()

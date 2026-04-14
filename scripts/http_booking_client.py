@@ -99,6 +99,81 @@ def concert_commit(
     )
 
 
+def concert_waiting_room_enter(
+    base: str,
+    user_id: int,
+    show_id: int,
+    *,
+    timeout: float = 10.0,
+) -> tuple[int, dict]:
+    url = f"{base}/api/write/concerts/{int(show_id)}/waiting-room/enter"
+    return request_json(url, "POST", {"user_id": user_id}, timeout=timeout)
+
+
+def concert_waiting_room_status(
+    base: str,
+    queue_ref: str,
+    *,
+    timeout: float = 10.0,
+) -> tuple[int, dict]:
+    ref = urllib.parse.quote(str(queue_ref).strip(), safe="")
+    url = f"{base}/api/write/concerts/waiting-room/status/{ref}"
+    return request_json(url, "GET", None, timeout=timeout)
+
+
+def concert_waiting_room_metrics(
+    base: str,
+    show_id: int,
+    *,
+    timeout: float = 10.0,
+) -> tuple[int, dict]:
+    url = f"{base}/api/write/concerts/{int(show_id)}/waiting-room/metrics"
+    return request_json(url, "GET", None, timeout=timeout)
+
+
+def concert_waiting_room_control(
+    base: str,
+    show_id: int,
+    *,
+    mode: str | None = None,
+    enabled: bool | None = None,
+    admit_rate_per_sec: int | None = None,
+    message: str | None = None,
+    timeout: float = 10.0,
+) -> tuple[int, dict]:
+    url = f"{base}/api/write/concerts/{int(show_id)}/waiting-room/control"
+    body: dict[str, Any] = {}
+    if mode is not None:
+        body["mode"] = str(mode)
+    if enabled is not None:
+        body["enabled"] = bool(enabled)
+    if admit_rate_per_sec is not None:
+        body["admit_rate_per_sec"] = int(admit_rate_per_sec)
+    if message is not None:
+        body["message"] = str(message)
+    return request_json(url, "POST", body, timeout=timeout)
+
+
+def concert_waiting_room_reset(
+    base: str,
+    show_id: int,
+    *,
+    timeout: float = 10.0,
+) -> tuple[int, dict]:
+    url = f"{base}/api/write/concerts/{int(show_id)}/waiting-room/reset"
+    return request_json(url, "POST", {}, timeout=timeout)
+
+
+def concert_redis_reset(
+    base: str,
+    show_id: int,
+    *,
+    timeout: float = 10.0,
+) -> tuple[int, dict]:
+    url = f"{base}/api/write/concerts/{int(show_id)}/redis/reset"
+    return request_json(url, "POST", {}, timeout=timeout)
+
+
 def booking_status_get(base: str, booking_ref: str, kind: Kind, *, timeout: float = 30.0) -> tuple[int, dict]:
     ref = str(booking_ref).strip()
     if kind == "theater":

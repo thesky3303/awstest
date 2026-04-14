@@ -5,15 +5,221 @@ import time
 from typing import Dict, List, Tuple
 
 from cache.redis_client import redis_client
-from config import CONCERT_SEAT_HOLD_TTL_SEC
+from config import (
+    CONCERT_CONFIRMED_SET_TTL_SEC,
+    CONCERT_SEAT_HOLD_TTL_SEC,
+    CONCERT_SEAT_HOLD_SOLDOUT_TTL_SEC,
+)
 
 
 def _seat_key(show_id: int, row: int, col: int) -> str:
     return f"concert:seat:{int(show_id)}:{int(row)}-{int(col)}:hold:v1"
 
 
+def _remain_key(show_id: int) -> str:
+    # remain 단일 카운터(단일 진실). read는 이 값만 신뢰한다.
+    return f"concert:show:{int(show_id)}:remain:v1"
+
+
+_REMAIN_ADJUST_LUA = """
+local v = redis.call('INCRBY', KEYS[1], tonumber(ARGV[1]))
+if v < 0 then
+  redis.call('SET', KEYS[1], 0)
+  v = 0
+end
+return v
+"""
+
+
+def adjust_remain(*, show_id: int, delta: int, ttl_sec: int | None = None) -> int:
+    """
+    remain 카운터를 원자적으로 조정한다.
+    - delta < 0 : 차감(hold/pending)
+    - delta > 0 : 복구(실패/취소/만료 롤백)
+    """
+    sid = int(show_id or 0)
+    d = int(delta or 0)
+    if sid <= 0 or d == 0:
+        return 0
+    try:
+        v = int(redis_client.eval(_REMAIN_ADJUST_LUA, 1, _remain_key(sid), d) or 0)
+        # remain은 hold/pending과 연동되는 운영 카운터이므로 누적 방지용 TTL을 옵션으로 지원
+        try:
+            ttl = int(ttl_sec or 0)
+            if ttl > 0:
+                redis_client.expire(_remain_key(sid), ttl)
+        except Exception:
+            pass
+        if int(v) <= 0 and d < 0:
+            _expire_hold_cache_on_soldout(show_id=sid)
+        return v
+    except Exception:
+        return 0
+
+
+def _expire_hold_cache_on_soldout(*, show_id: int) -> None:
+    """
+    평소에는 홀드 TTL=무한(0)으로 유지하되, remain이 0(마감) 되는 순간에만
+    홀드 관련 키들에 TTL을 걸어 자연 만료되게 한다.
+    """
+    sid = int(show_id or 0)
+    if sid <= 0:
+        return
+    ttl = int(CONCERT_SEAT_HOLD_SOLDOUT_TTL_SEC or 0)
+    if ttl <= 0:
+        return
+
+    # 메타 키 TTL
+    try:
+        pipe = redis_client.pipeline()
+        pipe.expire(_hold_set_key(sid), ttl)
+        pipe.expire(_hold_rev_key(sid), ttl)
+        pipe.expire(_remain_key(sid), ttl)
+        pipe.execute()
+    except Exception:
+        pass
+
+    # 좌석 홀드 키 TTL (show_id prefix로 scan)
+    try:
+        pat = f"concert:seat:{sid}:*:hold:v1"
+        batch: list[str] = []
+        for k in redis_client.scan_iter(match=pat, count=1000):
+            batch.append(str(k))
+            if len(batch) >= 1000:
+                p = redis_client.pipeline()
+                for kk in batch:
+                    p.expire(kk, ttl)
+                p.execute()
+                batch = []
+        if batch:
+            p = redis_client.pipeline()
+            for kk in batch:
+                p.expire(kk, ttl)
+            p.execute()
+    except Exception:
+        pass
+
+    # holdmeta TTL (booking_ref prefix라 show_id별 scan 불가 → JSON에서 show_id 확인)
+    try:
+        batch2: list[str] = []
+        for k in redis_client.scan_iter(match="concert:holdmeta:*:v1", count=1000):
+            kk = str(k)
+            try:
+                raw = redis_client.get(kk)
+                meta = json.loads(raw) if raw else None
+                if isinstance(meta, dict) and int(meta.get("show_id") or 0) == sid:
+                    batch2.append(kk)
+            except Exception:
+                continue
+            if len(batch2) >= 500:
+                p = redis_client.pipeline()
+                for x in batch2:
+                    p.expire(x, ttl)
+                p.execute()
+                batch2 = []
+        if batch2:
+            p = redis_client.pipeline()
+            for x in batch2:
+                p.expire(x, ttl)
+            p.execute()
+    except Exception:
+        pass
+
+
 def _reserved_set_key(show_id: int) -> str:
     return f"concert:reserved:{int(show_id)}:v1"
+
+def _confirmed_set_key(show_id: int) -> str:
+    """확정(회색) 좌석 — 홀드(주황)가 덮어씌우는 것을 방지하는 가드용."""
+    return f"concert:confirmed:{int(show_id)}:v1"
+
+
+def _hold_set_key(show_id: int) -> str:
+    # 처리중(홀드) 좌석만 별도로 관리해 UI에서 주황 표시 가능
+    return f"concert:hold:{int(show_id)}:v1"
+
+
+def _hold_rev_key(show_id: int) -> str:
+    """홀드 집합이 바뀔 때마다 증가 — 클라이언트는 DB 없이 rev만 비교해 주황 UI를 갱신할 수 있다."""
+    return f"concert:show:{int(show_id)}:hold_rev:v1"
+
+
+def get_hold_revision(show_id: int) -> int:
+    try:
+        return int(redis_client.get(_hold_rev_key(show_id)) or 0)
+    except Exception:
+        return 0
+
+
+def bump_hold_revision(show_id: int) -> int:
+    try:
+        k = _hold_rev_key(show_id)
+        v = int(redis_client.incr(k) or 0)
+        # hold_rev는 UI 동기화용 메타라 TTL 없이 누적되면 테스트/운영에서 값이 끝없이 커진다.
+        # 홀드 TTL과 동일하게 유지(홀드 변동이 있는 동안만 살아있게).
+        try:
+            ttl = int(CONCERT_SEAT_HOLD_TTL_SEC)
+            if ttl > 0:
+                redis_client.expire(k, ttl)
+        except Exception:
+            pass
+        return v
+    except Exception:
+        return 0
+
+
+def add_confirmed_seats(*, show_id: int, seat_keys: List[str]) -> None:
+    """
+    worker(DB 커밋 성공)에서 확정 좌석을 기록.
+    이 set은 write-api 홀드 전에 검사되어 confirmed->hold(회색->주황) 역전이 불가능해진다.
+    """
+    if not seat_keys:
+        return
+    try:
+        pipe = redis_client.pipeline()
+        sk = _confirmed_set_key(show_id)
+        pipe.sadd(sk, *[str(x) for x in seat_keys])
+        ttl = int(CONCERT_CONFIRMED_SET_TTL_SEC)
+        if ttl > 0:
+            pipe.expire(sk, ttl)
+        pipe.execute()
+    except Exception:
+        return
+
+
+def any_confirmed(*, show_id: int, seats: List[Tuple[int, int]]) -> bool:
+    if not seats:
+        return False
+    try:
+        sk = _confirmed_set_key(show_id)
+        pipe = redis_client.pipeline()
+        for r, c in seats:
+            pipe.sismember(sk, f"{int(r)}-{int(c)}")
+        res = pipe.execute()
+        if any(bool(x) for x in (res or [])):
+            return True
+    except Exception:
+        res = None
+
+    # 2차 가드(무DB): read 스냅샷에 confirmed_seats 가 있으면 그것도 반영해 confirmed→hold 역전을 막는다.
+    # (cold start 등 confirmed set이 아직 덜 채워진 순간에도 회색 좌석에 홀드가 걸리는 것을 완화)
+    try:
+        raw = redis_client.get(f"concert:show:{int(show_id)}:read:v2")
+        if not raw:
+            return False
+        snap = json.loads(raw)
+        if not isinstance(snap, dict):
+            return False
+        confirmed = snap.get("confirmed_seats")
+        if not isinstance(confirmed, list) or not confirmed:
+            return False
+        confirmed_set = {str(x) for x in confirmed}
+        for r, c in seats:
+            if f"{int(r)}-{int(c)}" in confirmed_set:
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _hold_meta_key(booking_ref: str) -> str:
@@ -30,18 +236,26 @@ def try_hold_seats(
     """
     좌석을 Redis에서 선점(접수 확정)한다.
     - seat key: SET NX EX ttl (booking_ref)
-    - reserved set: SADD "r-c" (UI/조회 remain 계산 + reserved_seats 제공)
+    - hold set: SADD "r-c" (UI 주황 표시 + remain 즉시 반영용)
     - hold meta: booking_ref → {show_id, seats[]} (실패 롤백용)
     """
-    ttl = int(ttl_sec or CONCERT_SEAT_HOLD_TTL_SEC)
-    ttl = max(10, ttl)
+    ttl = int(ttl_sec if ttl_sec is not None else CONCERT_SEAT_HOLD_TTL_SEC)
+    if ttl > 0:
+        ttl = max(10, ttl)
     if not seats:
         return {"ok": False, "code": "NO_SEATS"}
+
+    # 회색(확정) 좌석은 절대 주황(홀드)로 덮어씌우지 않는다.
+    if any_confirmed(show_id=show_id, seats=seats):
+        return {"ok": False, "code": "CONFIRMED_SEAT"}
 
     held: List[Tuple[int, int]] = []
     pipe = redis_client.pipeline()
     for r, c in seats:
-        pipe.set(_seat_key(show_id, r, c), booking_ref, nx=True, ex=ttl)
+        if ttl > 0:
+            pipe.set(_seat_key(show_id, r, c), booking_ref, nx=True, ex=ttl)
+        else:
+            pipe.set(_seat_key(show_id, r, c), booking_ref, nx=True)
     results = pipe.execute()
 
     for (r, c), ok in zip(seats, results):
@@ -52,20 +266,27 @@ def try_hold_seats(
             release_seats(show_id=show_id, seats=held, booking_ref=booking_ref)
             return {"ok": False, "code": "DUPLICATE_SEAT"}
 
-    # 예약 좌석 set 갱신 (remain 즉시 반영)
+    # 홀드 좌석 set 갱신 (remain 즉시 반영 + UI 주황 표시)
     pipe2 = redis_client.pipeline()
-    set_key = _reserved_set_key(show_id)
+    set_key = _hold_set_key(show_id)
     for r, c in held:
         pipe2.sadd(set_key, f"{int(r)}-{int(c)}")
-    pipe2.expire(set_key, ttl)
+    if ttl > 0:
+        pipe2.expire(set_key, ttl)
     meta = {
         "show_id": int(show_id),
         "seats": [f"{int(r)}-{int(c)}" for r, c in held],
         "ttl_sec": ttl,
         "created_at_epoch_ms": int(time.time() * 1000),
     }
-    pipe2.setex(_hold_meta_key(booking_ref), ttl, json.dumps(meta, ensure_ascii=False))
+    if ttl > 0:
+        pipe2.setex(_hold_meta_key(booking_ref), ttl, json.dumps(meta, ensure_ascii=False))
+    else:
+        pipe2.set(_hold_meta_key(booking_ref), json.dumps(meta, ensure_ascii=False))
     pipe2.execute()
+    # remain 카운터 단일 차감(hold 수량만큼)
+    adjust_remain(show_id=show_id, delta=-len(held), ttl_sec=ttl)
+    bump_hold_revision(show_id)
     return {"ok": True, "code": "HELD", "ttl_sec": ttl}
 
 
@@ -78,14 +299,37 @@ def release_seats(*, show_id: int, seats: List[Tuple[int, int]], booking_ref: st
     existing = pipe.execute()
 
     pipe2 = redis_client.pipeline()
-    set_key = _reserved_set_key(show_id)
+    set_key = _hold_set_key(show_id)
+    released = 0
     for (r, c), v in zip(seats, existing):
         # 내가 잡은 홀드만 해제(다른 booking_ref의 홀드는 건드리지 않음)
         if str(v or "") == str(booking_ref):
             pipe2.delete(_seat_key(show_id, r, c))
             pipe2.srem(set_key, f"{int(r)}-{int(c)}")
+            released += 1
     pipe2.execute()
+    # hold 롤백(실패/만료 등)에서 호출되는 경로: remain 복구
+    if released > 0:
+        adjust_remain(show_id=show_id, delta=released)
+    bump_hold_revision(show_id)
 
+
+def hold_seats_snapshot(show_id: int) -> List[str]:
+    try:
+        return list(redis_client.smembers(_hold_set_key(show_id)) or [])
+    except Exception:
+        return []
+
+
+def hold_count(show_id: int) -> int:
+    try:
+        return int(redis_client.scard(_hold_set_key(show_id)) or 0)
+    except Exception:
+        return 0
+
+
+# reserved_* 는 "확정 좌석" 개념으로 유지하고 싶지만,
+# 현재 시스템은 DB ACTIVE가 최종 근거이므로 read-cache에서 DB를 통해 확보한다.
 
 def reserved_seats_snapshot(show_id: int) -> List[str]:
     try:

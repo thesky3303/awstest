@@ -101,7 +101,22 @@
   }
 
   async function loadBootstrap(concertId) {
-    return await readApi(`/concert/${concertId}/booking-bootstrap`);
+    const delays = [0, 280, 600];
+    let lastErr = null;
+    for (let i = 0; i < delays.length; i += 1) {
+      if (delays[i] > 0) {
+        await new Promise((r) => setTimeout(r, delays[i]));
+      }
+      try {
+        if (runtime.ensureTicketingEndpointsLoaded) {
+          await runtime.ensureTicketingEndpointsLoaded();
+        }
+        return await readApi(`/concert/${concertId}/booking-bootstrap`, { cache: 'no-store' });
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('예매 정보를 불러오지 못했습니다.');
   }
 
   async function openShowModal(concert, show, state) {
@@ -110,12 +125,14 @@
       throw new Error('openConcertBookingModal이 없습니다.');
     }
 
-    const reserved = Array.isArray(show.reserved_seats) ? show.reserved_seats : [];
+    const confirmed = Array.isArray(show.confirmed_seats) ? show.confirmed_seats : [];
+    const hold = Array.isArray(show.hold_seats) ? show.hold_seats : [];
 
     window.openConcertBookingModal({
       concert,
       show,
-      reservedSeats: reserved,
+      confirmedSeats: confirmed,
+      holdSeats: hold,
       onBooked(result) {
         const sid = String(result.show_id);
         const selected = Array.isArray(result.selectedSeats) ? result.selectedSeats : [];
@@ -250,6 +267,9 @@
 
   async function mountConcertBookingPage(route) {
     await ensureMainCss();
+    if (runtime.ensureTicketingEndpointsLoaded) {
+      await runtime.ensureTicketingEndpointsLoaded();
+    }
     if (runtime.prefetchScripts) {
       runtime.prefetchScripts([MODAL_SCRIPT]);
     }

@@ -7,6 +7,18 @@
   const OVERLAY_ID = 'concert-booking-detail-overlay';
   const BODY_ACTIVE_CLASS = 'theaters-booking-modal-open';
 
+  let holdRevPollTimer = null;
+  let lastAppliedHoldRev = -1;
+  let holdPollSeq = 0;
+  let holdPollInFlight = false;
+
+  function stopHoldRevPoll() {
+    if (holdRevPollTimer) {
+      clearInterval(holdRevPollTimer);
+      holdRevPollTimer = null;
+    }
+  }
+
   function ensureDetailCss() {
     if (window.APP_RUNTIME && typeof window.APP_RUNTIME.ensureStyle === 'function') {
       return Promise.all([
@@ -107,6 +119,7 @@
   }
 
   function closeModal() {
+    stopHoldRevPoll();
     const overlay = document.getElementById(OVERLAY_ID);
     if (overlay) overlay.remove();
     unlockBodyScroll();
@@ -145,17 +158,47 @@
     return await writeApi('/concerts/booking/commit', 'POST', payload);
   }
 
+  async function enterWaitingRoom(showId, userId) {
+    return await writeApi(`/concerts/${encodeURIComponent(String(showId))}/waiting-room/enter`, 'POST', {
+      user_id: userId
+    });
+  }
+
+  async function waitingRoomStatus(queueRef) {
+    // 대기열 status는 인증/쿠키가 필요 없으므로 simple request로 보내
+    // 배포/ALB 이슈로 OPTIONS(preflight)가 깨질 때도 폴링이 멈추지 않게 한다.
+    return await writeApi(
+      `/concerts/waiting-room/status/${encodeURIComponent(String(queueRef))}`,
+      'GET',
+      null,
+      { credentials: 'omit', noAuth: true, cache: 'no-store' }
+    );
+  }
+
+  async function waitingRoomMetrics(showId) {
+    return await writeApi(
+      `/concerts/${encodeURIComponent(String(showId))}/waiting-room/metrics`,
+      'GET',
+      null,
+      { credentials: 'omit', noAuth: true, cache: 'no-store' }
+    );
+  }
+
   async function openConcertBookingModal(options) {
     await ensureDetailCss();
     closeModal();
+    lastAppliedHoldRev = -1;
     lockBodyScroll();
 
     const data = options && typeof options === 'object' ? options : {};
     const show = data.show || {};
     const concert = data.concert || {};
     const onBooked = typeof data.onBooked === 'function' ? data.onBooked : function () {};
-    const reservedSeats = new Set(
-      Array.isArray(data.reservedSeats) ? data.reservedSeats.map((value) => String(value)) : []
+    const confirmedSeats = new Set(
+      Array.isArray(data.confirmedSeats) ? data.confirmedSeats.map((value) => String(value)) : []
+    );
+    const holdSeats = new Set(
+      Array.isArray(data.holdSeats) ? data.holdSeats.map((value) => String(value)) : []
     );
 
     const runtimeMinutes = toInt(concert.runtime_minutes || 120);
@@ -164,9 +207,8 @@
 
     const seatCols = Math.max(1, toInt(show.seat_cols) || 10);
     const seatRows = Math.max(1, toInt(show.seat_rows) || 5);
-    const remainCount = Math.max(0, toInt(show.remain_count || 0));
-    const holdCount = Math.max(0, toInt(show.hold_count || 0));
-    const totalCount = Math.max(0, toInt(show.total_count || 0)) || seatRows * seatCols;
+    let remainCount = Math.max(0, toInt(show.remain_count || 0));
+    let totalCount = Math.max(0, toInt(show.total_count || 0)) || seatRows * seatCols;
     const price = Math.max(0, toInt(show.price || 0));
     const showId = toInt(show.show_id);
 
@@ -176,6 +218,10 @@
     let currentStep = 1;
     let lastResult = null;
     let bookingSucceeded = false;
+    let permitToken = '';
+    let waitingRoomReady = false;
+    let waitingRoomRef = '';
+    let waitingRoomSeq = 0;
 
     const overlay = document.createElement('div');
     overlay.id = OVERLAY_ID;
@@ -212,10 +258,9 @@
 
             <section class="theaters-detail-panel theaters-detail-panel-seat" data-panel="1">
               <div class="theaters-detail-seat-count">
-                점유 <strong class="theaters-detail-hold">${escapeHtml(String(holdCount))}</strong><span>석</span>
-                <span style="margin:0 6px;opacity:.5;">·</span>
                 잔여좌석 <strong class="theaters-detail-remain">${escapeHtml(String(remainCount))}</strong><span>/${escapeHtml(String(totalCount))}</span>
               </div>
+              <div class="theaters-detail-queue" hidden aria-live="polite"></div>
               <div class="theaters-detail-screen-label">STAGE</div>
               <div class="theaters-detail-screen-bar"></div>
               <div class="theaters-detail-seat-grid"></div>
@@ -242,6 +287,7 @@
                 <div class="theaters-detail-confirm-row"><span>인원</span><strong class="theaters-detail-confirm-count"></strong></div>
                 <div class="theaters-detail-confirm-row"><span>결제금액</span><strong class="theaters-detail-confirm-price"></strong></div>
               </div>
+              <div class="theaters-detail-queue" hidden aria-live="polite"></div>
               <div class="theaters-detail-confirm-ask-row">
                 <div class="theaters-detail-confirm-ask">결제를 진행하시겠습니까?</div>
                 <button type="button" class="theaters-detail-reselect">좌석 재선택</button>
@@ -285,6 +331,50 @@
     const confirmPrice = overlay.querySelector('.theaters-detail-confirm-price');
     const resultMessage = overlay.querySelector('.theaters-detail-result-message');
     const reselectButton = overlay.querySelector('.theaters-detail-reselect');
+    const queueNode = overlay.querySelector('.theaters-detail-queue');
+
+    function createWaitingRoomOverlay() {
+      const wrap = document.createElement('div');
+      wrap.className = 'wr-overlay';
+      wrap.innerHTML = `
+        <div class="wr-card" role="dialog" aria-label="대기열">
+          <button type="button" class="wr-close" aria-label="닫기">×</button>
+          <div class="wr-title">접속 인원이 많아 대기 중입니다.</div>
+          <div class="wr-sub">조금만 기다려주세요.</div>
+          <div class="wr-metrics">
+            <div class="wr-metrics-label">나의 대기순서</div>
+            <div class="wr-position">-</div>
+            <div class="wr-meta">
+              <div>예상 대기시간 <strong class="wr-eta">-</strong></div>
+              <div>현재 대기인원 <strong class="wr-backlog">-</strong>명</div>
+              <div class="wr-msg"></div>
+            </div>
+          </div>
+        </div>
+      `;
+      const closeBtn = wrap.querySelector('.wr-close');
+      if (closeBtn) closeBtn.addEventListener('click', () => closeModalFromUser(false));
+      return {
+        wrap,
+        pos: wrap.querySelector('.wr-position'),
+        eta: wrap.querySelector('.wr-eta'),
+        backlog: wrap.querySelector('.wr-backlog'),
+        msg: wrap.querySelector('.wr-msg')
+      };
+    }
+
+    const wrUi = createWaitingRoomOverlay();
+    overlay.appendChild(wrUi.wrap);
+
+    function updateRemainTotalDisplay() {
+      if (remainNode) {
+        remainNode.textContent = String(Math.max(0, remainCount - selectedSeats.size));
+      }
+      const totalSpan = remainNode && remainNode.nextElementSibling;
+      if (totalSpan && totalSpan.tagName === 'SPAN') {
+        totalSpan.textContent = `/${String(totalCount)}`;
+      }
+    }
 
     function updateSummary() {
       const seatLabels = Array.from(selectedSeats).map((seatKey) => {
@@ -295,9 +385,132 @@
       selectedValue.textContent = seatLabels.length ? seatLabels.join(', ') : '없음';
       selectedCount.textContent = `${selectedSeats.size}명`;
       selectedPrice.textContent = `${(selectedSeats.size * price).toLocaleString('ko-KR')}원`;
-      remainNode.textContent = String(Math.max(0, remainCount - selectedSeats.size));
+      updateRemainTotalDisplay();
       if (currentStep === 1) {
         submitButton.disabled = selectedSeats.size === 0;
+      }
+    }
+
+    /**
+     * 대기열 통과 직후·SQS 처리 중 등으로 확정/홀드 좌석이 바뀐 뒤 서버 스냅샷과 UI를 맞춘다.
+     */
+    function applySeatAvailabilityFromSets() {
+      if (!seatGrid) return;
+      seatGrid.querySelectorAll('.theaters-detail-seat').forEach((btn) => {
+        const key = btn.dataset && btn.dataset.seatKey ? String(btn.dataset.seatKey) : '';
+        if (!key) return;
+        btn.classList.remove('is-disabled', 'is-hold');
+        btn.disabled = false;
+        if (confirmedSeats.has(key)) {
+          btn.classList.add('is-disabled');
+          btn.disabled = true;
+          if (selectedSeats.has(key)) {
+            selectedSeats.delete(key);
+            btn.classList.remove('is-selected');
+          }
+        } else if (holdSeats.has(key)) {
+          btn.classList.add('is-hold');
+          btn.disabled = true;
+          if (selectedSeats.has(key)) {
+            selectedSeats.delete(key);
+            btn.classList.remove('is-selected');
+          }
+        }
+      });
+      updateSummary();
+    }
+
+    function applyBookingHoldsPayload(light) {
+      if (!light || !light.ok) return false;
+      // remain은 단일 카운터(서버)만 신뢰한다.
+      if (Number.isFinite(Number(light.remain_count))) {
+        remainCount = Math.max(0, toInt(light.remain_count));
+      }
+      if (Number.isFinite(Number(light.snapshot_total_count)) && toInt(light.snapshot_total_count) > 0) {
+        totalCount = toInt(light.snapshot_total_count);
+      }
+      if (Array.isArray(light.confirmed_seats)) {
+        confirmedSeats.clear();
+        light.confirmed_seats.forEach((k) => confirmedSeats.add(String(k)));
+      }
+      // cache/holds 기능이 꺼진 환경에서는 booking-holds가 hold_seats/confirmed_seats를 내려주지 않을 수 있다.
+      // 그 경우 기존(bootstrap 기반) 좌석 상태를 유지해, 빈 배열로 덮어쓰며 좌석이 "풀려 보이는" 문제를 막는다.
+      if (Array.isArray(light.hold_seats)) {
+        holdSeats.clear();
+        light.hold_seats.forEach((k) => {
+          holdSeats.add(String(k));
+        });
+      }
+      applySeatAvailabilityFromSets();
+      return true;
+    }
+
+    async function pollHoldRevIfChanged() {
+      // 처리중(홀드) 좌석(주황)은 "입장 대기열 통과"와 무관하게 실시간으로 보여야 한다.
+      // waitingRoomReady 전이라도 hold_rev 기반으로 갱신해 UI에서 백그라운드 처리 상태를 관측할 수 있게 한다.
+      if (currentStep !== 1) return;
+      const cid = toInt(concert.concert_id);
+      if (!cid || !showId || typeof readApi !== 'function') return;
+      // 폴링 중복 호출을 막아 out-of-order/덮어쓰기 자체를 차단한다.
+      if (holdPollInFlight) return;
+      holdPollInFlight = true;
+      const mySeq = (holdPollSeq += 1);
+      try {
+        const light = await readApi(`/concert/${cid}/booking-holds`, {
+          cache: 'no-store',
+          query: { show_id: showId }
+        });
+        // 폴링 요청이 겹치면 응답 순서가 뒤집힐 수 있다.
+        // 가장 마지막 요청만 반영해 오래된 응답이 최신 UI를 덮어쓰지 않게 한다.
+        if (mySeq !== holdPollSeq) return;
+        const rev = light && Number.isFinite(Number(light.hold_rev)) ? Number(light.hold_rev) : 0;
+        if (rev === lastAppliedHoldRev) return;
+        applyBookingHoldsPayload(light);
+        lastAppliedHoldRev = rev;
+        Object.assign(show, { remain_count: remainCount, total_count: totalCount });
+      } catch (e) {
+        /* ignore */
+      } finally {
+        holdPollInFlight = false;
+      }
+    }
+
+    function startHoldRevPoll() {
+      stopHoldRevPoll();
+      holdRevPollTimer = setInterval(() => {
+        pollHoldRevIfChanged();
+      }, 750);
+    }
+
+    async function refreshSeatSnapshotAfterWaitingRoom() {
+      const cid = toInt(concert.concert_id);
+      if (!cid || !showId || typeof readApi !== 'function') return;
+      try {
+        const light = await readApi(`/concert/${cid}/booking-holds`, {
+          cache: 'no-store',
+          query: { show_id: showId }
+        });
+        if (applyBookingHoldsPayload(light)) {
+          if (Number.isFinite(Number(light.hold_rev))) {
+            lastAppliedHoldRev = Number(light.hold_rev);
+          }
+          Object.assign(show, { remain_count: remainCount, total_count: totalCount });
+          return;
+        }
+      } catch (e) {
+        // 단일 기준: 좌석/잔여는 booking-holds만 사용한다.
+        // bootstrap 폴백은 스냅샷/메타가 섞이면서 출렁임(덮어쓰기)을 만들 수 있어 비활성화한다.
+        console.warn('[concert booking] booking-holds 실패(좌석 상태 갱신 생략)', e);
+      }
+    }
+
+    function setSeatUiEnabled(enabled) {
+      if (!seatGrid) return;
+      seatGrid.style.pointerEvents = enabled ? '' : 'none';
+      seatGrid.style.opacity = enabled ? '' : '0.55';
+      if (submitButton && currentStep === 1) {
+        // 대기열 통과 전에는 "결제 진행" 버튼을 막아서 강하게 연출
+        submitButton.disabled = !enabled || selectedSeats.size === 0;
       }
     }
 
@@ -319,6 +532,9 @@
     }
 
     function setStep(step) {
+      if (step !== 1) {
+        stopHoldRevPoll();
+      }
       currentStep = step;
 
       stepButtons.forEach((btn) => {
@@ -331,19 +547,151 @@
       if (resultPanel) resultPanel.hidden = step !== 3;
 
       if (step === 1) {
+        if (cancelButton) {
+          cancelButton.hidden = false;
+          cancelButton.style.display = '';
+        }
         submitButton.textContent = '결제 진행';
-        submitButton.disabled = selectedSeats.size === 0;
+        submitButton.disabled = !waitingRoomReady || selectedSeats.size === 0;
       } else if (step === 2) {
+        if (cancelButton) {
+          cancelButton.hidden = false;
+          cancelButton.style.display = '';
+        }
         submitButton.textContent = '확인';
         submitButton.disabled = selectedSeats.size === 0;
         updateConfirmPanel();
       } else {
+        // 결제 완료 화면은 "닫기"만 보여야 한다(영화 모달과 동일 UX).
+        if (cancelButton) {
+          cancelButton.hidden = true;
+          cancelButton.style.display = 'none';
+        }
         submitButton.textContent = '닫기';
         submitButton.disabled = false;
         if (resultMessage) {
           resultMessage.textContent = lastResult && lastResult.message ? lastResult.message : '';
         }
       }
+    }
+
+    async function acquirePermitOrThrow() {
+      const userId = getStoredUserId();
+      if (!userId) {
+        throw new Error('로그인이 필요합니다.');
+      }
+
+      if (permitToken) {
+        await refreshSeatSnapshotAfterWaitingRoom();
+        startHoldRevPoll();
+        return permitToken;
+      }
+
+      // 1) enter (네트워크 일시 장애는 재시도)
+      if (!waitingRoomRef) {
+        const enterDeadline = Date.now() + 30_000;
+        while (Date.now() < enterDeadline) {
+          try {
+            const enter = await enterWaitingRoom(showId, userId);
+            const qref = enter && enter.queue_ref ? String(enter.queue_ref) : '';
+            if (qref) {
+              waitingRoomRef = qref;
+              const seq = enter && Number.isFinite(Number(enter.seq)) ? Number(enter.seq) : 0;
+              if (seq > 0) waitingRoomSeq = seq;
+              if (wrUi.pos && waitingRoomSeq > 0) wrUi.pos.textContent = String(waitingRoomSeq);
+              break;
+            }
+          } catch (e) {
+            if (wrUi.msg) wrUi.msg.textContent = '서버 연결이 불안정합니다. 재시도 중…';
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (!waitingRoomRef) {
+          throw new Error('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
+        }
+      }
+
+      const deadline = Date.now() + 10 * 60 * 1000;
+      // 폴링 간격을 늘려 서버 부담/콘솔 에러 스팸을 줄인다.
+      // - 정상: 약 1초 간격
+      // - 에러: 점진적 백오프(최대 4초)
+      const BASE_POLL_MS = 1000;
+      const MAX_POLL_MS = 4000;
+      const METRICS_POLL_MS = 3000;
+      let pollMs = BASE_POLL_MS;
+      let lastMetricsAt = 0;
+      let lastBacklog = 0;
+      while (Date.now() < deadline) {
+        let st = null;
+        try {
+          st = await waitingRoomStatus(waitingRoomRef);
+          pollMs = BASE_POLL_MS;
+        } catch (e) {
+          if (wrUi.msg) wrUi.msg.textContent = '서버 연결이 불안정합니다. 재시도 중…';
+          pollMs = Math.min(MAX_POLL_MS, Math.floor(pollMs * 1.6));
+          await new Promise((r) => setTimeout(r, pollMs));
+          continue;
+        }
+
+        if (st && st.status === 'ADMITTED' && st.permit_token) {
+          permitToken = String(st.permit_token);
+          waitingRoomReady = true;
+          await refreshSeatSnapshotAfterWaitingRoom();
+          startHoldRevPoll();
+          setSeatUiEnabled(true);
+          if (wrUi.wrap) wrUi.wrap.remove();
+          return permitToken;
+        }
+
+        const q = st && st.queue ? st.queue : null;
+        const position = q && Number.isFinite(Number(q.position)) ? Number(q.position) : 0;
+        const ahead = q && Number.isFinite(Number(q.ahead)) ? Number(q.ahead) : Math.max(0, position - 1);
+        if (wrUi.pos) wrUi.pos.textContent = position > 0 ? String(position) : (waitingRoomSeq > 0 ? String(waitingRoomSeq) : '-');
+        if (wrUi.eta) {
+          const etaSec = st && Number.isFinite(Number(st.eta_sec)) ? Number(st.eta_sec) : 0;
+          if (etaSec > 0) {
+            const m = Math.floor(etaSec / 60);
+            const s = Math.floor(etaSec % 60);
+            wrUi.eta.textContent = m > 0 ? `약 ${m}분 ${s}초` : `약 ${s}초`;
+          } else {
+            // ahead=0 이거나 rate 계산 불가(일시 오류) 등
+            wrUi.eta.textContent = '-';
+          }
+        }
+
+        // backlog는 metrics가 있으면 그걸 우선, 없으면 ahead 기반 근사
+        if (wrUi.backlog) {
+          // metrics는 매 루프마다 치지 말고(부하 큼) 3초에 한 번만 갱신
+          let backlog = ahead > 0 ? ahead + 1 : 0;
+          const now = Date.now();
+          if (now - lastMetricsAt >= METRICS_POLL_MS) {
+            lastMetricsAt = now;
+            try {
+              const m = await waitingRoomMetrics(showId);
+              if (m && m.ok && Number.isFinite(Number(m.backlog))) {
+                lastBacklog = Number(m.backlog);
+              }
+            } catch (e) { /* ignore */ }
+          }
+          backlog = lastBacklog > 0 ? lastBacklog : backlog;
+          wrUi.backlog.textContent = backlog > 0 ? backlog.toLocaleString('ko-KR') : '-';
+        }
+        if (wrUi.msg) {
+          const ctl = st && st.control ? st.control : null;
+          const msg = ctl && ctl.message ? String(ctl.message) : '';
+          wrUi.msg.textContent = msg;
+        }
+
+        // 기존 자리(queueNode)는 보조로만 유지(상단 얇은 라인)
+        if (queueNode) {
+          queueNode.hidden = false;
+          queueNode.textContent = position > 0 ? `대기열 ${position}번째 (앞에 ${ahead}명)` : '대기열 진입 중…';
+        }
+        // 약간의 지터를 넣어 동시 폴링 피크를 완화
+        const jitter = Math.floor(Math.random() * 180);
+        await new Promise((r) => setTimeout(r, Math.min(MAX_POLL_MS, pollMs) + jitter));
+      }
+      throw new Error('대기열 처리 시간이 초과되었습니다.');
     }
 
     function handleSeatClick(button, seatKey) {
@@ -384,9 +732,13 @@
           seat.className = 'theaters-detail-seat';
           seat.textContent = String(col);
           seat.setAttribute('aria-label', createSeatLabel(row, col));
+          seat.dataset.seatKey = seatKey;
 
-          if (reservedSeats.has(seatKey)) {
+          if (confirmedSeats.has(seatKey)) {
             seat.classList.add('is-disabled');
+            seat.disabled = true;
+          } else if (holdSeats.has(seatKey)) {
+            seat.classList.add('is-hold');
             seat.disabled = true;
           }
 
@@ -422,6 +774,7 @@
       legend.innerHTML = `
         <span class="concert-seat-legend-item"><span class="concert-seat-dot"></span> 선택가능</span>
         <span class="concert-seat-legend-item"><span class="concert-seat-dot is-selected"></span> 선택</span>
+        <span class="concert-seat-legend-item"><span class="concert-seat-dot is-hold"></span> 처리중</span>
         <span class="concert-seat-legend-item"><span class="concert-seat-dot is-disabled"></span> 예매완료</span>
       `;
 
@@ -433,12 +786,12 @@
 
       const rowPrev = document.createElement('button');
       rowPrev.type = 'button';
-      rowPrev.className = 'theaters-booking-calendar-btn';
+      rowPrev.className = 'concert-seat-nav-btn';
       rowPrev.textContent = '열 이전';
 
       const rowNext = document.createElement('button');
       rowNext.type = 'button';
-      rowNext.className = 'theaters-booking-calendar-btn';
+      rowNext.className = 'concert-seat-nav-btn';
       rowNext.textContent = '열 다음';
 
       const pageInfo = document.createElement('div');
@@ -449,12 +802,12 @@
 
       const prevBtn = document.createElement('button');
       prevBtn.type = 'button';
-      prevBtn.className = 'theaters-booking-calendar-btn';
+      prevBtn.className = 'concert-seat-nav-btn';
       prevBtn.textContent = '좌석 이전';
 
       const nextBtn = document.createElement('button');
       nextBtn.type = 'button';
-      nextBtn.className = 'theaters-booking-calendar-btn';
+      nextBtn.className = 'concert-seat-nav-btn';
       nextBtn.textContent = '좌석 다음';
 
       const jump = document.createElement('div');
@@ -462,7 +815,7 @@
       jump.innerHTML = `
         <span style="font-size:13px;color:#555;">좌석번호 이동</span>
         <input type="number" min="1" max="${seatCols}" placeholder="번호 입력">
-        <button type="button" class="theaters-booking-calendar-btn">이동</button>
+        <button type="button" class="concert-seat-nav-btn">이동</button>
       `;
 
       rowPaging.appendChild(rowPrev);
@@ -551,9 +904,13 @@
           seat.className = 'theaters-detail-seat';
           seat.textContent = String(col);
           seat.setAttribute('aria-label', createSeatLabel(activeRow, col));
+          seat.dataset.seatKey = seatKey;
 
-          if (reservedSeats.has(seatKey)) {
+          if (confirmedSeats.has(seatKey)) {
             seat.classList.add('is-disabled');
+            seat.disabled = true;
+          } else if (holdSeats.has(seatKey)) {
+            seat.classList.add('is-hold');
             seat.disabled = true;
           }
           if (selectedSeats.has(seatKey)) {
@@ -619,6 +976,32 @@
     updateSummary();
     setStep(1);
 
+    // 강한 연출: 모달 진입 즉시 "입장 대기열"부터 시작 → 통과 전 좌석 선택/다음 단계 막기
+    setSeatUiEnabled(false);
+    // 좌석 "처리중(주황)"은 모달 오픈 즉시부터 관측(대기열 통과 전이라도 다른 유저/부하의 변화를 볼 수 있게)
+    startHoldRevPoll();
+    (async function () {
+      try {
+        const userId = getStoredUserId();
+        if (!userId) {
+          alert('로그인이 필요합니다.');
+          if (typeof window.openLoginPage === 'function') {
+            window.openLoginPage();
+          }
+          closeModalFromUser(false);
+          return;
+        }
+        await acquirePermitOrThrow();
+        waitingRoomReady = true;
+        setSeatUiEnabled(true);
+        updateSummary();
+      } catch (e) {
+        console.error(e);
+        alert(e && e.message ? e.message : '대기열 처리 실패');
+        closeModalFromUser(false);
+      }
+    })();
+
     closeButton.addEventListener('click', function () {
       closeModalFromUser(bookingSucceeded);
     });
@@ -675,12 +1058,20 @@
 
         submitButton.disabled = true;
         submitButton.textContent = '처리 중...';
+        if (queueNode) {
+          queueNode.hidden = true;
+          queueNode.textContent = '';
+        }
 
         try {
+          await refreshSeatSnapshotAfterWaitingRoom();
+          const permit = await acquirePermitOrThrow();
           const commit = await requestConcertBooking({
             user_id: userId,
             show_id: showId,
             seats: Array.from(selectedSeats)
+            ,
+            permit_token: permit
           });
 
           let result = commit;
@@ -695,7 +1086,25 @@
             const ref = encodeURIComponent(String(commit.booking_ref).trim());
             result = await pollAsyncBookingStatus(`/concerts/booking/status/${ref}`, {
               timeoutSec: 600,
-              intervalMs: 400
+              intervalMs: 400,
+              onProgress(status) {
+                const q = status && status.queue ? status.queue : null;
+                const position = q && Number.isFinite(Number(q.position)) ? Number(q.position) : 0;
+                const ahead = q && Number.isFinite(Number(q.ahead)) ? Number(q.ahead) : Math.max(0, position - 1);
+                if (queueNode) {
+                  queueNode.hidden = false;
+                  if (position > 0) {
+                    queueNode.textContent = `대기열 ${position}번째 (앞에 ${ahead}명)`;
+                  } else {
+                    queueNode.textContent = '대기열 진입 중…';
+                  }
+                }
+                if (position > 0) {
+                  submitButton.textContent = `대기열 ${position}번째…`;
+                } else {
+                  submitButton.textContent = '예매 처리 중…';
+                }
+              }
             });
           }
 

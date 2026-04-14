@@ -102,6 +102,7 @@ output "zzzzz" {
   kubectl -n ${var.ticketing_namespace} patch cm ${var.ticketing_configmap_name} --type merge -p '{"data":{"DB_NAME":"ticketing"}}'
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name}
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.read_api_deployment_name}
+  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.write_api_deployment_name}
 
   .............................
   EOT

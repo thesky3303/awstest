@@ -86,9 +86,23 @@ CONCERT_SHOWS_META_TTL_SEC = _get_int_env("CONCERT_SHOWS_META_TTL_SEC", 120, min
 CONCERTS_LIST_CACHE_TTL_SEC = _get_int_env("CONCERTS_LIST_CACHE_TTL_SEC", 0, minimum=0)
 CONCERT_DETAIL_CACHE_TTL_SEC = _get_int_env("CONCERT_DETAIL_CACHE_TTL_SEC", 0, minimum=0)
 
-# 콘서트 좌석 홀드(접수 확정) TTL(초): Write API에서 좌석을 먼저 홀드하고, Read/UI는 홀드 수를 즉시 remain에 반영.
-# worker가 DB에 최종 커밋을 하더라도 UI는 "확정된(홀드된) 수량" 기준으로 즉시 줄어든 값을 보게 된다.
-CONCERT_SEAT_HOLD_TTL_SEC = _get_int_env("CONCERT_SEAT_HOLD_TTL_SEC", 600, minimum=10)
+# 콘서트 좌석 홀드(접수 확정) TTL(초)
+# - 기본은 0=무한(만료 없음): hold가 사라지며 remain이 복구/출렁이는 것을 막는다.
+# - 단, remain이 0(매진/마감)이 되는 순간에는 아래 SOLDOUT TTL을 걸어 홀드 캐시를 정리한다.
+CONCERT_SEAT_HOLD_TTL_SEC = _get_int_env("CONCERT_SEAT_HOLD_TTL_SEC", 0, minimum=0)
+# 매진(remaining <= 0) 순간에 홀드 캐시(좌석 홀드 키/hold set/holdmeta 등)에 걸 TTL(초)
+CONCERT_SEAT_HOLD_SOLDOUT_TTL_SEC = _get_int_env("CONCERT_SEAT_HOLD_SOLDOUT_TTL_SEC", 600, minimum=10)
+
+# 콘서트 확정(회색) 좌석 Redis set TTL(초).
+# - 목적: "회색(확정)" 좌석에 대해 이후 홀드(주황)가 걸려 덮어씌워지는 것을 데이터 레벨에서 차단.
+# - worker가 DB 커밋 성공 시점에 set에 추가, write-api 홀드 전에 set membership을 확인한다.
+# - 0 이면 만료 없음(운영 시 메모리/정리 정책 고려).
+CONCERT_CONFIRMED_SET_TTL_SEC = _get_int_env("CONCERT_CONFIRMED_SET_TTL_SEC", 86400, minimum=0)
+
+# 콘서트 remain 계산에 Waiting Room backlog를 수요로 차감할지 여부.
+# - true: remain = total - (confirmed ∪ hold) - backlog(클램프)  (강한 혼잡 연출)
+# - false: remain = total - (confirmed ∪ hold)                 (실제 좌석 기준)
+CONCERT_REMAIN_SUBTRACT_WR_BACKLOG = _get_bool_env("CONCERT_REMAIN_SUBTRACT_WR_BACKLOG", False)
 
 # ── 향후 Cognito + API Gateway (지금은 미사용 · AUTH_MODE=legacy 유지) ────────
 # JWT 검증은 나중에 JWKS/issuer 기준으로 붙이면 됨. DB에 토큰 저장은 필수 아님.
@@ -113,10 +127,47 @@ SQS_READ_TIMEOUT_SEC = _get_int_env("SQS_READ_TIMEOUT_SEC", 30, minimum=1)
 # 예매 비동기: SQS 수락 후 ElastiCache `booking:queued:{ref}` TTL(초). 폴링 시 PROCESSING vs 무효 ref 구분에 사용.
 BOOKING_QUEUED_TTL_SEC = _get_int_env("BOOKING_QUEUED_TTL_SEC", 7200, minimum=60)
 
+# SQS 예매 처리 대기열(연출용) 카운터 TTL(초): booking:queue:{type}:{id}:{enq|done}
+# - UX(대기순번) 연출용이므로 런/오픈 단위로 자연 리셋되게 TTL을 둔다.
+# - 기본값은 queued TTL과 동일.
+BOOKING_QUEUE_COUNTER_TTL_SEC = _get_int_env("BOOKING_QUEUE_COUNTER_TTL_SEC", BOOKING_QUEUED_TTL_SEC, minimum=60)
+
 # SQS 예매를 켠 경우 예매 상태(booking:*) ElastiCache는 필수 — worker·write-api 불일치 방지로 자동 True.
 BOOKING_STATE_ENABLED = _get_bool_env("BOOKING_STATE_ENABLED", True)
 if SQS_ENABLED and str(SQS_QUEUE_URL or "").strip():
     BOOKING_STATE_ENABLED = True
+
+# ── Waiting Room (입장 대기열) ────────────────────────────────────────────────
+# 목적: DB 처리(SQS/worker)와 별개로 "예매 화면 진입/커밋 권한"을 순서대로 부여해 과부하를 막는다.
+# 단순 시연/데모용 기본 정책:
+# - QUEUE_ADMIT_RATE_PER_SEC: 초당 입장 허가 인원(가상 게이트 오픈 속도)
+# - QUEUE_PERMIT_TTL_SEC: 입장권(permit) 유효 시간. 만료되면 다시 대기열로.
+# - QUEUE_REF_TTL_SEC: queue_ref(대기열 티켓) 유효 시간.
+QUEUE_ADMIT_RATE_PER_SEC = _get_int_env("QUEUE_ADMIT_RATE_PER_SEC", 90, minimum=1)
+QUEUE_PERMIT_TTL_SEC = _get_int_env("QUEUE_PERMIT_TTL_SEC", 120, minimum=10)
+QUEUE_REF_TTL_SEC = _get_int_env("QUEUE_REF_TTL_SEC", 7200, minimum=60)
+
+# Waiting Room 카운터(enq/done/clock/control/observe, rps bucket) TTL(초).
+# - 기존엔 TTL이 없어 동일 show_id 시연을 반복하면 seq가 누적되어 "2만/3만 대기열"처럼 보일 수 있다.
+# - show 종료 후 자연 소거되도록 TTL을 둔다.
+# - 기본값은 QUEUE_REF_TTL_SEC와 동일(대기 티켓이 유효한 동안은 카운터도 유지).
+WR_COUNTER_TTL_SEC = _get_int_env("WR_COUNTER_TTL_SEC", QUEUE_REF_TTL_SEC, minimum=60)
+
+# Waiting Room AUTO 모드(모니터링 없이도 동작 + 추후 외부 관측 주입과 결합)
+WR_AUTO_WINDOW_SEC = _get_int_env("WR_AUTO_WINDOW_SEC", 10, minimum=1)  # 최근 RPS 계산 창
+WR_AUTO_DRAIN_SEC = _get_int_env("WR_AUTO_DRAIN_SEC", 90, minimum=10)   # backlog를 이 시간 내로 빼는 목표(짧을수록 rate↑)
+WR_AUTO_MIN_RATE = _get_int_env("WR_AUTO_MIN_RATE", 8, minimum=1)
+WR_AUTO_MAX_RATE = _get_int_env("WR_AUTO_MAX_RATE", 220, minimum=1)
+WR_OBSERVE_TTL_SEC = _get_int_env("WR_OBSERVE_TTL_SEC", 30, minimum=5)  # 외부 관측(모니터링) 유효 TTL
+
+# AUTO에서 "언제부터 대기열을 강하게 켤지" 기준(기본값은 시연/운영 둘 다 무난한 선)
+# - 최근 enter RPS가 이 값 이상이거나, backlog가 이 값 이상이면 '혼잡'으로 간주
+# 데모: 혼잡 판정을 덜 쉽게 걸려면 값을 올린다 → 바이패스(빠른 입장) 구간이 넓어짐
+WR_QUEUE_ON_RPS = _get_int_env("WR_QUEUE_ON_RPS", 30, minimum=1)
+WR_QUEUE_ON_BACKLOG = _get_int_env("WR_QUEUE_ON_BACKLOG", 450, minimum=1)
+# - 혼잡이 아니면 거의 즉시 입장(대기열 UI가 잠깐 스치거나 아예 안 보이게)
+WR_BYPASS_RPS = _get_int_env("WR_BYPASS_RPS", 8, minimum=1)
+WR_BYPASS_BACKLOG = _get_int_env("WR_BYPASS_BACKLOG", 100, minimum=0)
 
 # ── API 포트 ─────────────────────────────────────────────────────────────────
 READ_API_HOST  = "0.0.0.0"

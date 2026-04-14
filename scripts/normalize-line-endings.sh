@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eu
+set -o pipefail 2>/dev/null || true
 
 # CRLF -> LF for all repo shell scripts and Terraform files (HGFS/Windows/IDE safe).
 # Idempotent. Git clone 후·terraform apply 전에 한 번 실행해도 됨.
