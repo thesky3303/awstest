@@ -296,6 +296,17 @@ def _parse_seat_key(value):
     return (r, c) if r > 0 and c > 0 else None
 
 
+def _is_mysql_deadlock(exc: Exception) -> bool:
+    """
+    MySQL/InnoDB deadlock: OperationalError 1213
+    """
+    try:
+        code = int(getattr(exc, "args", [None])[0])
+        return code == 1213
+    except Exception:
+        return False
+
+
 def _generate_booking_code():
     import secrets, string
     letters = "".join(secrets.choice(string.ascii_uppercase) for _ in range(2))
@@ -364,8 +375,9 @@ def _concert_pending_key(show_id: int) -> str:
     return f"concert:show:{int(show_id)}:pending:v1"
 
 
-def _concert_remain_key(show_id: int) -> str:
-    # remain 단일 카운터(단일 진실)
+def _concert_remain_count_key(show_id: int) -> str:
+    # remain_count 단일 카운터(단일 진실)
+    # 주의: Redis key suffix는 레거시 호환을 위해 ':remain:v1'를 유지한다.
     return f"concert:show:{int(show_id)}:remain:v1"
 
 
@@ -383,6 +395,10 @@ def _adjust_concert_pending(show_id: int, delta: int) -> None:
     d = _to_int(delta, 0)
     if show_id <= 0 or d == 0:
         return
+    try:
+        elasticache_read_cache_client.eval(_PENDING_ADJUST_LUA, 1, _concert_pending_key(int(show_id)), int(d))
+    except Exception:
+        return
 
 
 def _adjust_concert_remain(show_id: int, delta: int) -> None:
@@ -390,13 +406,8 @@ def _adjust_concert_remain(show_id: int, delta: int) -> None:
     if show_id <= 0 or d == 0:
         return
     try:
-        elasticache_read_cache_client.eval(_PENDING_ADJUST_LUA, 1, _concert_remain_key(int(show_id)), int(d))
+        elasticache_read_cache_client.eval(_PENDING_ADJUST_LUA, 1, _concert_remain_count_key(int(show_id)), int(d))
     except Exception:
-        return
-    try:
-        elasticache_read_cache_client.eval(_PENDING_ADJUST_LUA, 1, _concert_pending_key(int(show_id)), int(d))
-    except Exception:
-        # pending은 UX/연출 + 빠른 remain 반영용. 실패해도 예매 정합성(DB)에는 영향 없음.
         return
 
 def _to_epoch_seconds(dt_like) -> int:
@@ -476,7 +487,19 @@ def _finalize_concert_hold_by_ref(booking_ref: str, *, restore_remain: bool) -> 
         set_key = _concert_hold_set_key(show_id)
         for (r, c), v in zip(parsed, existing):
             if str(v or "") == ref:
-                pipe2.delete(_concert_seat_key(show_id, r, c))
+                seat_key = _concert_seat_key(show_id, r, c)
+                if restore_remain:
+                    # 실패/롤백: 홀드 자체를 제거(재시도/다른 유저 홀드 가능)
+                    pipe2.delete(seat_key)
+                else:
+                    # 성공: 좌석은 확정이므로 Redis 좌석 키는 남겨 2중 방어(DB/Redis)로 중복 홀드를 막는다.
+                    # value는 'CONFIRMED'로 바꿔 hold/booking_ref 추적과 구분한다.
+                    # TTL이 있더라도 공연 종료 전까지는 유지되는 편이 안전하므로 PERSIST로 만료를 제거한다.
+                    pipe2.set(seat_key, "CONFIRMED")
+                    try:
+                        pipe2.persist(seat_key)
+                    except Exception:
+                        pass
                 # 성공/실패 모두 hold set에서는 제거 (주황 해제)
                 pipe2.srem(set_key, f"{int(r)}-{int(c)}")
                 released += 1
@@ -496,7 +519,9 @@ def _finalize_concert_hold_by_ref(booking_ref: str, *, restore_remain: bool) -> 
     except Exception:
         pass
 
-    # 실패/취소/만료 등으로 롤백이면 remain 복구
+    # Legacy behavior: remain is an operational Redis counter.
+    # - 성공(restore_remain=False): hold 단계에서 이미 감소한 remain을 유지
+    # - 실패/롤백(restore_remain=True): 해제된 수량만큼 remain을 복구
     if restore_remain and released > 0:
         _adjust_concert_remain(int(show_id), int(released))
 
@@ -689,6 +714,7 @@ def process_theater_booking(body):
 
 # ── 콘서트 예매 처리 ─────────────────────────────────────────────────────────
 def process_concert_booking(body):
+    # Revert to the earlier "Redis remain counter is source-of-truth" behavior.
     booking_ref = body["booking_ref"]
     user_id = _to_int(body["user_id"])
     show_id = _to_int(body["show_id"])
@@ -713,7 +739,6 @@ def process_concert_booking(body):
             if not show:
                 conn.rollback()
                 store_result(booking_ref, {"ok": False, "code": "NOT_FOUND"}, booking_type="concert", entity_id=show_id)
-                # 홀드가 남지 않도록 정리(회차가 사라진 비정상 케이스)
                 _finalize_concert_hold_by_ref(booking_ref, restore_remain=True)
                 if pending_count > 0:
                     _adjust_concert_remain(show_id, pending_count)
@@ -726,7 +751,9 @@ def process_concert_booking(body):
                 if row_no > seat_rows or col_no > seat_cols:
                     conn.rollback()
                     store_result(booking_ref, {"ok": False, "code": "INVALID_SEAT"}, booking_type="concert", entity_id=show_id)
-                    _finalize_concert_hold_by_ref(booking_ref)
+                    _finalize_concert_hold_by_ref(booking_ref, restore_remain=True)
+                    if pending_count > 0:
+                        _adjust_concert_remain(show_id, pending_count)
                     return
 
             cur.execute(
@@ -749,8 +776,6 @@ def process_concert_booking(body):
                 except pymysql.err.IntegrityError:
                     continue
 
-            # 좌석 점유(동시성 제어의 핵심): ACTIVE 유니크 인덱스가 좌석 단위로 경쟁을 해결한다.
-            # 다건 좌석은 멀티 VALUES로 한 번에 INSERT해 round-trip을 줄인다.
             values_sql = ",".join(["(%s,%s,%s,%s)"] * len(parsed_seats))
             params = []
             for row_no, col_no in parsed_seats:
@@ -768,50 +793,37 @@ def process_concert_booking(body):
             )
             payment_id = cur.lastrowid
 
-            # remain 단일 카운터를 신뢰한다. (DB 좌석 COUNT로 재계산하지 않음)
-            # - hold_applied=True: write-api에서 이미 remain이 차감됨 → 성공 시 remain 변화 없음
-            # - hold_applied=False & pending_count>0: enqueue 시 remain 차감됨 → 성공 시 변화 없음
-            # - 그 외(예외 경로)에서도 worker에서 remain을 재계산/덮어쓰지 않는다.
+            # Redis remain counter as operational truth
             try:
-                raw_remain = elasticache_read_cache_client.get(_concert_remain_key(show_id))
+                raw_remain = elasticache_read_cache_client.get(_concert_remain_count_key(show_id))
                 remain_count_after = _to_int(raw_remain, 0)
             except Exception:
                 remain_count_after = 0
+
             if remain_count_after <= 0:
                 cur.execute("UPDATE concert_shows SET status = 'CLOSED' WHERE show_id = %s", (show_id,))
             else:
                 cur.execute("UPDATE concert_shows SET status = 'OPEN' WHERE show_id = %s", (show_id,))
 
         conn.commit()
-        # DB 커밋 성공 좌석을 confirmed set에 기록 + 공연 종료 후 자동 만료
-        try:
-            confirmed_key = _concert_confirmed_set_key(show_id)
-            pipec = elasticache_read_cache_client.pipeline()
-            for r, c in parsed_seats:
-                pipec.sadd(confirmed_key, f"{int(r)}-{int(c)}")
-            show_date_epoch = _to_epoch_seconds(show.get("show_date"))
-            exp_at = 0
-            if show_date_epoch > 0:
-                exp_at = int(show_date_epoch) + int(CONCERT_CONFIRMED_SET_GRACE_SEC)
-            elif int(CONCERT_CONFIRMED_SET_FALLBACK_TTL_SEC) > 0:
-                exp_at = int(time.time()) + int(CONCERT_CONFIRMED_SET_FALLBACK_TTL_SEC)
-            if exp_at > 0:
-                pipec.expireat(confirmed_key, exp_at)
-            pipec.execute()
-        except Exception:
-            pass
-        store_result(booking_ref, {
-            "ok": True, "code": "OK",
-            "booking_id": booking_id, "booking_code": booking_code,
-            "payment_id": payment_id, "remain_count_after": remain_count_after,
-        }, booking_type="concert", entity_id=show_id)
+
+        store_result(
+            booking_ref,
+            {
+                "ok": True,
+                "code": "OK",
+                "booking_id": booking_id,
+                "booking_code": booking_code,
+                "payment_id": payment_id,
+                "remain_count_after": remain_count_after,
+            },
+            booking_type="concert",
+            entity_id=show_id,
+        )
         _finalize_concert_hold_by_ref(booking_ref, restore_remain=False)
-        # pending 선차감(홀드 없이 큐로만 차감된 경우)을 처리 완료 시점에 정리한다.
-        # 성공이면 confirmed/DB가 remain 감소를 유지하므로 pending은 내려야 중복 차감이 없다.
         if pending_count > 0:
             _adjust_concert_pending(show_id, -pending_count)
 
-        # 콘서트: 회차 스냅샷(+레거시 부트스트랩)만 무효화. 목록/공연상세는 매 티켓마다 지우지 않음.
         try:
             cid = _to_int(show.get("concert_id"))
             if cid > 0 and show_id > 0:
@@ -828,7 +840,6 @@ def process_concert_booking(body):
         _finalize_concert_hold_by_ref(booking_ref, restore_remain=True)
         if pending_count > 0:
             _adjust_concert_remain(show_id, pending_count)
-        if pending_count > 0:
             _adjust_concert_pending(show_id, -pending_count)
     except Exception as e:
         conn.rollback()
@@ -836,7 +847,6 @@ def process_concert_booking(body):
         _finalize_concert_hold_by_ref(booking_ref, restore_remain=True)
         if pending_count > 0:
             _adjust_concert_remain(show_id, pending_count)
-        if pending_count > 0:
             _adjust_concert_pending(show_id, -pending_count)
         log.error("콘서트 예매 처리 실패: %s", e)
     finally:

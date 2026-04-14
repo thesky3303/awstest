@@ -13,8 +13,8 @@ from fastapi.responses import JSONResponse
 
 from config import BOOKING_QUEUE_COUNTER_TTL_SEC, DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
 from sqs_client import get_booking_status_dict, send_booking_message
-from concert.sale_state import get_sale_state, is_open, set_sale_state
-from concert.seat_hold import adjust_remain, try_hold_seats
+from concert.sale_state import get_sale_state, set_sale_state
+from concert.seat_hold import release_seats, try_hold_seats
 from cache.redis_client import redis_client
 from waiting_room import (
     enter as wr_enter,
@@ -30,6 +30,82 @@ router = APIRouter()
 
 # NOTE: Local synchronous fallback removed (EKS-only).
 
+def _remain_count_key(show_id: int) -> str:
+    # remain_count 단일 카운터(단일 진실)
+    # 주의: Redis key suffix는 레거시 호환을 위해 ':remain:v1'를 유지한다.
+    return f"concert:show:{int(show_id)}:remain:v1"
+
+
+def _seed_remain_count_if_missing(show_id: int) -> int:
+    """
+    remain_count Redis 카운터는 write 경로에서 INCRBY로 조정되므로, 키가 없으면 음수 클램프(0)로 매진이 될 수 있다.
+    따라서 키가 없을 때만 DB remain_count로 1회 seed(setnx)한다.
+    Returns: seed에 사용한 값(또는 기존 값 파싱 실패 시 0)
+    """
+    sid = int(show_id or 0)
+    if sid <= 0:
+        return 0
+    k = _remain_count_key(sid)
+    raw_val: int | None = None
+    try:
+        raw = redis_client.get(k)
+        if raw is not None:
+            raw_val = max(0, int(raw or 0))
+            # 과거 버그로 remain key가 0으로 "굳은" 경우를 복구:
+            # hold/confirmed/pending이 모두 0이면 아직 판매/점유가 없다는 뜻이므로 DB seed로 복원해도 안전하다.
+            if raw_val <= 0:
+                try:
+                    hold_n = int(redis_client.scard(f"concert:hold:{sid}:v1") or 0)
+                except Exception:
+                    hold_n = 0
+                try:
+                    conf_n = int(redis_client.scard(f"concert:confirmed:{sid}:v1") or 0)
+                except Exception:
+                    conf_n = 0
+                try:
+                    pending_n = max(0, int(redis_client.get(f"concert:show:{sid}:pending:v1") or 0))
+                except Exception:
+                    pending_n = 0
+                if hold_n > 0 or conf_n > 0 or pending_n > 0:
+                    return int(raw_val)
+                # no activity -> fall through to DB seed/repair below
+            else:
+                return int(raw_val)
+    except Exception:
+        raw_val = None
+
+    # 키가 없거나, "0으로 굳은" 상태(활동 없음)일 때만 DB에서 가져와 seed/repair
+    seed = 0
+    conn = _get_tx_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT remain_count FROM concert_shows WHERE show_id = %s LIMIT 1",
+                (sid,),
+            )
+            row = cur.fetchone()
+            seed = max(0, int((row or {}).get("remain_count") or 0))
+    except Exception:
+        seed = 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    try:
+        if seed > 0:
+            # raw_val is None -> seed with setnx
+            if raw_val is None:
+                redis_client.setnx(k, int(seed))
+            else:
+                # repair stuck-0 key (no activity) -> overwrite
+                redis_client.set(k, int(seed))
+    except Exception:
+        pass
+    return int(seed)
+
+
 def _reset_concert_redis_seat_state(*, show_id: int) -> dict:
     """
     데모/테스트용: 해당 show_id의 '좌석 상태' Redis 키를 **write-api가 실제로 사용하는 Redis(DB=cache)** 기준으로 리셋.
@@ -44,6 +120,9 @@ def _reset_concert_redis_seat_state(*, show_id: int) -> dict:
         f"concert:confirmed:{sid}:v1",
         f"concert:hold:{sid}:v1",
         f"concert:show:{sid}:hold_rev:v1",
+        # remain 단일 카운터(단일 진실) — 데모/테스트 리셋 시 반드시 초기화해야 함.
+        # (안 지우면 이전 런의 값(예: 50000)이 남아 booking-holds에서 잔여가 튀는 현상이 생길 수 있다.)
+        f"concert:show:{sid}:remain:v1",
         f"concert:show:{sid}:pending:v1",
         f"concert:show:{sid}:read:v2",
     ]
@@ -92,6 +171,10 @@ def _reset_concert_redis_seat_state(*, show_id: int) -> dict:
     except Exception:
         deleted_holdmeta = 0
 
+    # reset 직후 remain_count는 "삭제"만 하면 첫 커밋에서 0으로 클램프될 수 있으므로,
+    # DB 값으로 seed 해 두어 데모가 1장만 사도 매진되는 문제를 방지한다.
+    seeded_remain = _seed_remain_count_if_missing(sid)
+
     return {
         "ok": True,
         "show_id": sid,
@@ -99,6 +182,7 @@ def _reset_concert_redis_seat_state(*, show_id: int) -> dict:
         "deleted_seat_keys": int(deleted_seat_keys),
         "deleted_holdmeta": int(deleted_holdmeta),
         "scanned_holdmeta": int(scanned_holdmeta),
+        "seeded_remain_count": int(seeded_remain),
     }
 
 def _pending_key(show_id: int) -> str:
@@ -109,21 +193,11 @@ def _pending_incr(show_id: int, delta: int) -> None:
     d = int(delta or 0)
     if d == 0:
         return
-    try:
-        k = _pending_key(int(show_id))
-        v = int(redis_client.incrby(k, d) or 0)
-        # 카운터 누적 방지: 오픈/런 단위로 자연 만료
-        try:
-            ttl = int(BOOKING_QUEUE_COUNTER_TTL_SEC)
-            if ttl > 0:
-                redis_client.expire(k, ttl)
-        except Exception:
-            pass
-        # 음수로 내려가는 비정상 케이스 방지
-        if v < 0:
-            redis_client.set(k, "0")
-    except Exception:
-        return
+
+
+def _db_pending_adjust(show_id: int, delta: int) -> None:
+    # Reverted: pending_count DB column is not used.
+    return
 
 
 def _to_int(value, default=0):
@@ -156,6 +230,60 @@ def _get_tx_connection():
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=False,
     )
+
+
+def _db_any_active_seat(*, show_id: int, seats: list[tuple[int, int]]) -> bool:
+    """
+    DB 단일 진실: 이미 ACTIVE(확정) 좌석이 있으면 write 단계에서 조기 차단한다.
+    - confirmed set/스냅샷이 reset 등으로 비어 있어도, DB는 항상 최종 근거다.
+    """
+    sid = int(show_id or 0)
+    if sid <= 0 or not seats:
+        return False
+    conn = _get_tx_connection()
+    try:
+        with conn.cursor() as cur:
+            clauses = []
+            params: list[int] = [sid]
+            for r, c in seats:
+                clauses.append("(seat_row_no=%s AND seat_col_no=%s)")
+                params.extend([int(r), int(c)])
+            where_seats = " OR ".join(clauses) if clauses else "1=0"
+            cur.execute(
+                "SELECT 1 FROM concert_booking_seats "
+                "WHERE show_id=%s AND UPPER(COALESCE(status,''))='ACTIVE' AND ("
+                + where_seats +
+                ") LIMIT 1",
+                tuple(params),
+            )
+            return bool(cur.fetchone())
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _db_show_snapshot(*, show_id: int) -> dict | None:
+    conn = _get_tx_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT show_id, seat_rows, seat_cols, total_count, remain_count, status "
+                "FROM concert_shows WHERE show_id=%s LIMIT 1",
+                (int(show_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _is_duplicate_key_error(exc: Exception) -> bool:
@@ -197,6 +325,7 @@ def commit_concert_booking(payload: dict):
     seats = data.get("seats") or []
     skip_hold = bool(data.get("skip_hold") is True)
     permit_token = str(data.get("permit_token") or "").strip()
+    queue_ref = str(data.get("queue_ref") or "").strip()
 
     if user_id <= 0 or show_id <= 0:
         return JSONResponse(
@@ -231,46 +360,79 @@ def commit_concert_booking(payload: dict):
             content={"ok": False, "code": "NO_SEATS", "message": "좌석을 선택해주세요."},
         )
 
+    # DB 단일 진실 기반의 선검사(조기 실패):
+    # - remain_count가 부족하면 SOLD_OUT
+    # - 이미 ACTIVE 좌석이면 DUPLICATE_SEAT
+    show_row = _db_show_snapshot(show_id=show_id)
+    if not show_row:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "NOT_FOUND"})
+    try:
+        seat_rows = int(show_row.get("seat_rows") or 0)
+        seat_cols = int(show_row.get("seat_cols") or 0)
+    except Exception:
+        seat_rows, seat_cols = 0, 0
+    for r, c in parsed_seats:
+        if seat_rows > 0 and r > seat_rows:
+            return JSONResponse(status_code=409, content={"ok": False, "code": "INVALID_SEAT"})
+        if seat_cols > 0 and c > seat_cols:
+            return JSONResponse(status_code=409, content={"ok": False, "code": "INVALID_SEAT"})
+    try:
+        remain_db = int(show_row.get("remain_count") or 0)
+    except Exception:
+        remain_db = 0
+    if remain_db < req_count:
+        return JSONResponse(status_code=409, content={"ok": False, "code": "SOLD_OUT"})
+    if _db_any_active_seat(show_id=show_id, seats=parsed_seats):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "DUPLICATE_SEAT"})
+
     # Waiting Room(입장 대기열): permit 없이는 커밋을 받지 않는다(새치기 방지).
     if not wr_verify_permit(permit_token=permit_token, kind="concert", entity_id=show_id, user_id=user_id):
-        return JSONResponse(
-            status_code=429,
-            content={
-                "ok": False,
-                "code": "WAITING_ROOM_REQUIRED",
-                "message": "대기열 처리 중입니다. 잠시 후 다시 시도해주세요.",
-            },
-        )
-
-    # 실서비스 UX: 마감 상태면 즉시 컷(백그라운드 처리량/큐 적체와 무관하게 화면은 '땡'에 끊긴다)
-    if not is_open(show_id):
-        st = get_sale_state(show_id)
-        return JSONResponse(
-            status_code=409,
-            content={
-                "ok": False,
-                "code": "SALES_CLOSED",
-                "message": "모든 투표가 마감되었습니다.",
-                "sale": st,
-            },
-        )
+        # UX: 좌석 중복 등으로 재시도하는 유저는 "이미 ADMITTED" 상태일 수 있다.
+        # permit TTL이 짧아 만료된 경우, queue_ref를 함께 받으면 status()로 즉시 새 permit을 발급받아 우선 처리한다.
+        if queue_ref:
+            try:
+                st = wr_status(queue_ref=queue_ref)
+                if isinstance(st, dict) and st.get("status") == "ADMITTED" and st.get("permit_token"):
+                    permit_token2 = str(st.get("permit_token") or "").strip()
+                    if permit_token2 and wr_verify_permit(
+                        permit_token=permit_token2, kind="concert", entity_id=show_id, user_id=user_id
+                    ):
+                        permit_token = permit_token2
+                    else:
+                        raise ValueError("permit verify failed")
+                else:
+                    raise ValueError("not admitted")
+            except Exception:
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "ok": False,
+                        "code": "WAITING_ROOM_REQUIRED",
+                        "message": "대기열 처리 중입니다. 잠시 후 다시 시도해주세요.",
+                    },
+                )
+        else:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "ok": False,
+                    "code": "WAITING_ROOM_REQUIRED",
+                    "message": "대기열 처리 중입니다. 잠시 후 다시 시도해주세요.",
+                },
+            )
 
     # booking_ref를 write-api에서 먼저 발급해 Redis 홀드 ↔ SQS 메시지 ↔ 폴링 키를 하나로 묶는다.
     booking_ref = str(uuid.uuid4())
 
     hold_applied = False
-    pending_count = 0
     if skip_hold:
-        # 2) "바로 큐로" 경로: 좌석 홀드를 걸지 않고, enqueue 시점에 pending 카운터로 remain을 선차감한다.
-        # - 성공 시 pending은 worker에서 내려가고(중복 차감 방지), confirmed/DB가 remain 감소를 유지한다.
-        # - 실패/중복좌석 등은 worker에서 pending을 내려 remain이 복구된다.
-        pending_count = int(req_count)
-        _pending_incr(show_id, pending_count)
-        # remain 단일 카운터 차감(hold 없이도 선차감)
-        adjust_remain(show_id=show_id, delta=-pending_count, ttl_sec=BOOKING_QUEUE_COUNTER_TTL_SEC)
+        # "바로 큐로" 경로 (레거시/테스트): 홀드를 걸지 않고 큐에 넣는다.
+        pass
     else:
         # 1) 홀드(주황) 경로: 좌석 단위 선점으로 remain이 즉시 줄어들게 한다.
-        hold = try_hold_seats(show_id=show_id, seats=parsed_seats, booking_ref=booking_ref)
+        hold = try_hold_seats(
+            show_id=show_id, seats=parsed_seats, booking_ref=booking_ref
+        )
         if not hold.get("ok"):
             code = hold.get("code") or "DUPLICATE_SEAT"
             # confirmed 좌석은 hold로 덮을 수 없음(회색->주황 금지)
@@ -287,19 +449,23 @@ def commit_concert_booking(payload: dict):
     except Exception:
         pass
 
-    booking_ref = send_booking_message(
-        booking_type="concert",
-        group_id=f"{show_id}-sh{_seat_shard_id(parsed_seats[0][0], parsed_seats[0][1])}",
-        booking_ref=booking_ref,
-        payload={
-            "user_id": user_id,
-            "show_id": show_id,
-            "seats": [f"{r}-{c}" for r, c in parsed_seats],
-            # pending_count는 "홀드 없이 큐로만 선차감"하는 경로에서 사용.
-            "pending_count": int(pending_count),
-            "hold_applied": bool(hold_applied),
-        },
-    )
+    try:
+        booking_ref = send_booking_message(
+            booking_type="concert",
+            group_id=f"{show_id}-sh{_seat_shard_id(parsed_seats[0][0], parsed_seats[0][1])}",
+            booking_ref=booking_ref,
+            payload={
+                "user_id": user_id,
+                "show_id": show_id,
+                "seats": [f"{r}-{c}" for r, c in parsed_seats],
+                "hold_applied": bool(hold_applied),
+            },
+        )
+    except Exception:
+        # enqueue 실패는 접수 자체가 실패이므로 hold를 즉시 원복한다.
+        if hold_applied:
+            release_seats(show_id=show_id, seats=parsed_seats, booking_ref=booking_ref)
+        raise
     return {
         "ok": True,
         "code": "QUEUED",

@@ -180,10 +180,10 @@
     btn.type = 'button';
     btn.className = 'concert-booking-card';
 
-    const sale = show && show.sale ? show.sale : null;
-    const saleStatus = sale && sale.status ? String(sale.status).toUpperCase() : 'OPEN';
-    const isSaleOpen = saleStatus === 'OPEN';
-    const isOpen = isSaleOpen && String(show.status || '').toUpperCase() === 'OPEN';
+    // 마감/비활성 판단은 remain_count만 사용한다.
+    // 과거에 show.status가 CLOSED로 "박히고" remain은 양수인 꼬임이 발생할 수 있어,
+    // UI 단계에서는 status를 신뢰하지 않는다(요구사항: 잔여 기반으로만 마감 판단).
+    const isOpen = true;
     const isSoldOut = toInt(show.remain_count) <= 0;
     const disabled = !isOpen || isSoldOut;
     if (disabled) {
@@ -192,8 +192,7 @@
     }
 
     const remainText =
-      !isSaleOpen ? '모든 투표가 마감되었습니다' :
-      (isSoldOut ? '매진' : `잔여좌석 ${escapeHtml(String(show.remain_count))} / ${escapeHtml(String(show.total_count))}`);
+      isSoldOut ? '매진' : `잔여좌석 ${escapeHtml(String(show.remain_count))} / ${escapeHtml(String(show.total_count))}`;
 
     btn.innerHTML = `
       <div class="concert-booking-time">${escapeHtml(formatRangeLabel(show, concert))}</div>
@@ -219,11 +218,7 @@
   function renderPage(mount, state) {
     const { concert, shows } = state;
     const title = escapeHtml(concert.title || '공연');
-    const anyClosed = shows.some((s) => {
-      const sale = s && s.sale ? s.sale : null;
-      const st = sale && sale.status ? String(sale.status).toUpperCase() : 'OPEN';
-      return st !== 'OPEN';
-    });
+    const anyClosed = false;
 
     mount.innerHTML = `
       <div class="concert-booking-page">

@@ -19,7 +19,6 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from cache.redis_client import redis_client
-from concert.sale_state import mget_sale_states
 from concert.seat_hold import hold_count, hold_seats_snapshot
 from cache.elasticache_booking_client import elasticache_booking_client
 from config import (
@@ -124,22 +123,50 @@ def _pending_key(show_id: int) -> str:
     return f"concert:show:{int(show_id)}:pending:v1"
 
 
-def _remain_key(show_id: int) -> str:
-    # remain 단일 카운터(단일 진실)
+def _remain_count_key(show_id: int) -> str:
+    # remain_count 단일 카운터(단일 진실)
+    # 주의: Redis key suffix는 레거시 호환을 위해 ':remain:v1'를 유지한다.
     return f"concert:show:{int(show_id)}:remain:v1"
 
 
 def _get_pending(show_id: int) -> int:
-    try:
-        return max(0, int(redis_client.get(_pending_key(show_id)) or 0))
-    except Exception:
-        return 0
+    # Legacy: pending is optional/UX-only. Default to 0 on read path.
+    return 0
 
 
 def _get_remain(show_id: int) -> int:
     try:
-        v = redis_client.get(_remain_key(int(show_id)))
+        v = redis_client.get(_remain_count_key(int(show_id)))
         return max(0, int(v or 0))
+    except Exception:
+        return 0
+
+
+def _get_or_seed_remain_from_row(row: Dict[str, Any]) -> int:
+    """
+    remain_count는 단일 카운터(단일 진실)만 사용한다.
+    - 카운터 키가 없을 때만 DB remain_count로 1회 seed(setnx)
+    - reserved/hold/pending 등으로 재계산하지 않는다(엉뚱한 remain 유입 방지)
+    """
+    sid = int(row.get("show_id") or 0)
+    if sid <= 0:
+        return 0
+    try:
+        raw = redis_client.get(_remain_count_key(sid))
+        if raw is None:
+            seed = max(0, int(row.get("remain_count") or 0))
+            if seed > 0:
+                try:
+                    redis_client.setnx(_remain_count_key(sid), int(seed))
+                except Exception:
+                    pass
+            return int(seed)
+        v = max(0, int(raw or 0))
+        try:
+            total = int(row.get("total_count") or 0)
+        except Exception:
+            total = 0
+        return min(v, total) if total > 0 else v
     except Exception:
         return 0
 
@@ -311,10 +338,26 @@ def _show_payload_from_row(r: Dict[str, Any], *, confirmed_keys: List[str], hold
     total = int(r.get("total_count") or 0)
     # confirmed_keys: 회색(확정) / hold_keys: 주황(처리중)
     hold = hold_count(sid)  # legacy numeric (필요 시 유지)
-    pending = _get_pending(sid)  # 디버그/관측용(remain 계산에 사용하지 않음)
+    pending = 0
 
-    # remain은 단일 카운터만 신뢰한다(재계산 금지)
-    remain = _get_remain(sid)
+    # remain은 단일 카운터만 신뢰한다(재계산 금지).
+    # 단, 데모/리셋 직후 remain 키가 없을 수 있으므로(초기화),
+    # 그 경우에만 DB의 remain_count로 "1회 seed"해 버튼이 CLOSED로 잠기는 것을 방지한다.
+    remain = 0
+    try:
+        raw = redis_client.get(_remain_count_key(sid))
+        if raw is None:
+            seed = int(r.get("remain_count") or 0)
+            if seed > 0:
+                try:
+                    redis_client.setnx(_remain_count_key(sid), seed)
+                except Exception:
+                    pass
+            remain = max(0, int(seed))
+        else:
+            remain = max(0, int(raw or 0))
+    except Exception:
+        remain = 0
     return {
         "show_id": sid,
         "concert_id": int(r["concert_id"]),
@@ -327,10 +370,10 @@ def _show_payload_from_row(r: Dict[str, Any], *, confirmed_keys: List[str], hold
         "total_count": total,
         # 점유(홀드) 좌석 수 — DB 확정과 별개로 UI에 즉시 반영되는 수량
         "hold_count": int(hold),
-        "pending_count": int(pending),
         "remain_count": remain,
         "price": int(r.get("price") or 0),
-        "status": "CLOSED" if remain <= 0 else (r.get("status") or "OPEN"),
+        # status는 remain 카운터를 기준으로만 만든다(수동/과거 값으로 인해 remain>0인데 CLOSED가 내려오는 꼬임 방지).
+        "status": "CLOSED" if remain <= 0 else "OPEN",
         "hold_seats": hold_keys,
         "confirmed_seats": confirmed_keys,
         "reserved_seats": sorted(
@@ -349,13 +392,6 @@ def _build_show_snapshot_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
         confirmed_keys=confirmed_map.get(str(sid), []),
         hold_keys=hold_map.get(str(sid), []),
     )
-    # remain 카운터가 아직 초기화되지 않은 경우(첫 접근/마이그레이션) DB remain_count로 1회 보정
-    try:
-        if int(_get_remain(sid)) <= 0 and int(row.get("remain_count") or 0) > 0:
-            # write-path에서만 증가/감소하므로 read에서 덮어쓰진 않되, "없으면 채우기"는 허용
-            redis_client.setnx(_remain_key(sid), int(row.get("remain_count") or 0))
-    except Exception:
-        pass
     return payload
 
 
@@ -473,12 +509,9 @@ def get_concert_bootstrap_cached_or_load(concert_id: int) -> Optional[Dict[str, 
     show_rows = _get_show_rows_for_bootstrap(concert_id)
     if not show_rows:
         return {"concert": concert, "shows": []}
-    sale_map = mget_sale_states([int(r["show_id"]) for r in show_rows])
     show_ids = [int(r["show_id"]) for r in show_rows]
-    # remain_count는 항상 동일 규칙으로 계산한다:
-    # - confirmed: DB ACTIVE 좌석(최종 근거)
-    # - hold/pending: Redis 기반 즉각 반영(연출/UX)
-    # 이렇게 하면 스냅샷/holds/bootstrap이 서로 다른 source를 섞어 remain이 출렁이는 문제를 줄일 수 있다.
+    # remain_count는 단일 카운터(단일 진실)만 사용한다.
+    # reserved/hold/pending으로 재계산하면, hold set이 꼬였을 때(예: 대량 잔존) remain이 2 같은 값으로 깨질 수 있다.
     confirmed_bulk_db = _fetch_confirmed_seat_keys_by_show(show_ids)
     # 처리중(홀드) 좌석은 변동이 잦아, 스냅샷 히트여도 Redis 최신값으로 덮어쓴다(주황 UI 즉시 반영용).
     hold_bulk_latest = _fetch_hold_seat_keys_by_show(show_ids)
@@ -492,7 +525,6 @@ def get_concert_bootstrap_cached_or_load(concert_id: int) -> Optional[Dict[str, 
                 snap = json.loads(raw)
                 if isinstance(snap, dict):
                     sid = str(int(row["show_id"]))
-                    snap["sale"] = sale_map.get(sid, {"status": "OPEN", "close_at_epoch_ms": None})
                     # 최신 hold_seats를 덮어쓰기(스냅샷 remain_count는 약간 stale일 수 있으나,
                     # 좌석 UI 주황/점유 표시는 최신 hold_seats가 더 중요하다.)
                     latest_hold = hold_bulk_latest.get(sid, [])
@@ -506,11 +538,8 @@ def get_concert_bootstrap_cached_or_load(concert_id: int) -> Optional[Dict[str, 
                             reserved,
                             key=lambda x: (int(str(x).split("-")[0]), int(str(x).split("-")[1])),
                         )
-                        # remain은 스냅샷 remain_count에 의존하지 말고 매번 동일 규칙으로 재계산한다.
-                        total = int(snap.get("total_count") or 0)
-                        pending = _get_pending(int(row["show_id"]))
-                        snap["pending_count"] = int(pending)
-                        snap["remain_count"] = max(0, int(total) - (len(reserved) + int(pending)))
+                        # remain은 단일 카운터만 사용 (재계산 금지)
+                        snap["remain_count"] = int(_get_or_seed_remain_from_row(row))
                         snap["status"] = "CLOSED" if int(snap["remain_count"]) <= 0 else (snap.get("status") or "OPEN")
                     except Exception:
                         pass
@@ -532,13 +561,7 @@ def get_concert_bootstrap_cached_or_load(concert_id: int) -> Optional[Dict[str, 
             slot[i]["hold_seats"] = hold_bulk.get(str(sid), [])
             slot[i]["confirmed_seats"] = confirmed_bulk_db.get(str(sid), [])
             slot[i]["reserved_seats"] = sorted(set(slot[i]["hold_seats"]).union(slot[i]["confirmed_seats"]), key=lambda x: (int(x.split("-")[0]), int(x.split("-")[1])))
-            try:
-                total = int(slot[i].get("total_count") or row.get("total_count") or 0)
-            except Exception:
-                total = 0
-            pending = _get_pending(int(sid))
-            slot[i]["pending_count"] = int(pending)
-            slot[i]["remain_count"] = max(0, int(total) - (len(set(slot[i]["reserved_seats"])) + int(pending)))
+            slot[i]["remain_count"] = int(_get_or_seed_remain_from_row(row))
             slot[i]["status"] = "CLOSED" if int(slot[i]["remain_count"]) <= 0 else (slot[i].get("status") or "OPEN")
     shows_filled: List[Dict[str, Any]] = [s for s in slot if s is not None]
     return {"concert": concert, "shows": shows_filled}
@@ -554,7 +577,6 @@ def get_concert_bootstrap_for_show(concert_id: int, show_id: int) -> Optional[Di
         return None
     snap = get_or_load_concert_show_snapshot(row)
     snap = dict(snap) if isinstance(snap, dict) else {"show_id": int(show_id)}
-    snap["sale"] = mget_sale_states([int(show_id)]).get(str(int(show_id)), {"status": "OPEN", "close_at_epoch_ms": None})
     return {"concert": concert, "shows": [snap]}
 
 

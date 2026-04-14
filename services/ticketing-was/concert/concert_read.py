@@ -51,10 +51,12 @@ def get_concert_booking_holds(concert_id: int, show_id: int = Query(..., ge=1)):
     """
     conn = get_db_read_connection()
     total_count: int = 0
+    remain_count_db: int = 0
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT total_count FROM concert_shows WHERE concert_id = %s AND show_id = %s LIMIT 1",
+                "SELECT total_count, remain_count FROM concert_shows "
+                "WHERE concert_id = %s AND show_id = %s LIMIT 1",
                 (int(concert_id), int(show_id)),
             )
             row = cur.fetchone()
@@ -64,6 +66,10 @@ def get_concert_booking_holds(concert_id: int, show_id: int = Query(..., ge=1)):
                 total_count = int(row.get("total_count") or 0)
             except Exception:
                 total_count = 0
+            try:
+                remain_count_db = max(0, int(row.get("remain_count") or 0))
+            except Exception:
+                remain_count_db = 0
     finally:
         conn.close()
 
@@ -91,19 +97,31 @@ def get_concert_booking_holds(concert_id: int, show_id: int = Query(..., ge=1)):
     except Exception:
         confirmed_from_db = []
 
-    # remain 단일 카운터(단일 진실). read는 이 값만 내려준다.
-    remain_counter: Optional[int] = None
+    # remain_count 단일 카운터(단일 진실). read는 이 값만 내려준다.
+    # 단, reset/초기화 직후 Redis key가 없을 수 있어, 그 경우에만 DB remain_count로 1회 seed한다.
+    remain_count_counter: Optional[int] = None
     try:
-        remain_counter = max(0, int(redis_client.get(f"concert:show:{sid}:remain:v1") or 0))
+        raw = redis_client.get(f"concert:show:{sid}:remain:v1")
+        if raw is None:
+            if remain_count_db > 0:
+                try:
+                    redis_client.setnx(f"concert:show:{sid}:remain:v1", int(remain_count_db))
+                except Exception:
+                    pass
+            remain_count_counter = int(remain_count_db)
+        else:
+            v = max(0, int(raw or 0))
+            # 과거 버그로 remain key가 0으로 "굳은" 경우 복구:
+            # hold/confirmed/pending이 모두 0이면 아직 판매/점유가 없다는 뜻이므로 DB seed로 복원해도 안전하다.
+            if v <= 0 and remain_count_db > 0 and hc == 0 and len(confirmed_from_db) == 0:
+                try:
+                    redis_client.set(f"concert:show:{sid}:remain:v1", int(remain_count_db))
+                    v = int(remain_count_db)
+                except Exception:
+                    pass
+            remain_count_counter = v
     except Exception:
-        remain_counter = None
-
-    # pending은 관측용 (remain 계산에는 사용하지 않음)
-    pending: int = 0
-    try:
-        pending = max(0, int(redis_client.get(f"concert:show:{sid}:pending:v1") or 0))
-    except Exception:
-        pending = 0
+        remain_count_counter = None
 
     out: dict[str, Any] = {
         "ok": True,
@@ -112,17 +130,20 @@ def get_concert_booking_holds(concert_id: int, show_id: int = Query(..., ge=1)):
         "hold_seats": hold_sorted,
         "hold_count": hc,
         "hold_rev": rev,
-        "pending_count": int(pending),
         # 디버그/관측용(클라이언트는 무시 가능)
         "debug": {
             "total_count_db": int(total_count or 0),
+            "remain_count_db": int(remain_count_db or 0),
             "confirmed_from_db_count": len(confirmed_from_db),
             "hold_count_snapshot": int(hc),
-            "pending_count": int(pending),
-            "remain_counter": int(remain_counter) if remain_counter is not None else None,
+            "remain_count_counter": int(remain_count_counter) if remain_count_counter is not None else None,
         },
     }
     out["confirmed_seats"] = confirmed_from_db
-    if remain_counter is not None:
-        out["remain_count"] = int(remain_counter)
+    if remain_count_counter is not None:
+        # 잔여는 total을 넘을 수 없다(캐시/리셋/드리프트 방어)
+        if int(total_count) > 0:
+            out["remain_count"] = min(int(remain_count_counter), int(total_count))
+        else:
+            out["remain_count"] = int(remain_count_counter)
     return out

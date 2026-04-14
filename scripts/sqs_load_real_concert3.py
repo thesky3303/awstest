@@ -26,9 +26,10 @@ import sys
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Event
 from threading import Lock
 from pathlib import Path
-from typing import Optional, Set, Tuple
+from typing import Optional, Set, Tuple, Dict, List, Any
 
 import http_booking_client as http_w
 
@@ -440,11 +441,39 @@ def parse_args():
         default=True,
         help="드레인 후 waiting-room control을 AUTO로 복원(기본 true)",
     )
+    p.add_argument(
+        "--allow-qref-reuse",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="tickets가 entrants보다 클 때 queue_ref/user_id를 재사용해도 허용(기본 false: 성공률을 위해 tickets_effective만큼 enter를 수행)",
+    )
+    p.add_argument(
+        "--mode",
+        default="realistic",
+        choices=["realistic", "parallel"],
+        help=(
+            "realistic: 유저별 enter→대기(poll)→admitted 후 commit 흐름(기본). "
+            "parallel: 기존처럼 enter/ticket을 별도 풀로 동시에 실행(연출/벤치용)."
+        ),
+    )
+    p.add_argument(
+        "--max-tickets-per-user",
+        type=int,
+        default=0,
+        help="realistic 모드에서 admitted 된 유저 1명이 시도할 최대 커밋 횟수(0=제한없음). 기본 0",
+    )
+    p.add_argument(
+        "--think-time-ms",
+        type=int,
+        default=0,
+        help="realistic 모드에서 동일 유저가 연속 커밋 사이에 기다리는 시간(ms). 0이면 대기 없음.",
+    )
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    stop_event = Event()
     unit = max(1, int(args.unit))
     entrants = max(0, int(args.entrants)) * unit
     tickets = max(0, int(args.tickets)) * unit
@@ -477,7 +506,25 @@ def main():
         conn.close()
 
     # tickets가 remain/빈좌석보다 크면, 실제 커밋 시도는 확보된 좌석 수로 제한한다.
+    # realistic 모드에서도 1명이 여러 장을 시도할 수 있으므로 tickets를 entrants로 캡하지 않는다.
     tickets_effective = min(tickets, len(free_seats))
+    if entrants > 0 or tickets > 0:
+        print(
+            f"[info] unit={unit} entrants={entrants} tickets={tickets} tickets_effective={tickets_effective}",
+            file=sys.stderr,
+        )
+
+    # 성공률(=QUEUED/OK)을 높이려면 ticket 1건당 고유 user_id/queue_ref가 필요하다.
+    # parallel 모드에서는 연출을 위해 tickets > entrants도 허용하는데, 기본은 재사용 금지 + enter_target 승격으로 보정한다.
+    enter_target = int(entrants)
+    if str(args.mode).strip().lower() != "realistic":
+        if tickets_effective > entrants and not bool(args.allow_qref_reuse):
+            enter_target = int(tickets_effective)
+            print(
+                f"[warn] tickets_effective({tickets_effective}) > entrants({entrants}) "
+                f"→ allow_qref_reuse=false 이므로 enter_target={enter_target}로 올려 고유 queue_ref를 확보합니다.",
+                file=sys.stderr,
+            )
 
     t0 = time.monotonic()
 
@@ -558,25 +605,30 @@ def main():
             time.sleep(observe_iv)
         print(f"[observe] {label} done max_hold_count={max_hc} max_sample={max_sample}", file=sys.stderr)
 
-    # 1) entrants 만큼 waiting-room enter (queue_ref만 확보; 폴링은 티켓 시도자만 한다)
-    # NOTE: 실제 트래픽처럼 보이게 enter와 ticket을 동시에 진행한다.
+    # 1) entrants 만큼 waiting-room enter
+    # - realistic: 유저별 enter→poll→commit 파이프라인(실제 UX)
+    # - parallel: enter와 ticket을 동시에 진행(연출/벤치)
     enter_workers = max(1, int(args.enter_workers))
     timeout = max(1.0, float(args.timeout))
     progress_every = max(1, int(args.progress_every))
 
-    queue_refs: list[str] = [""] * entrants  # enter 결과를 idx 위치에 채움(원본 유지)
+    queue_refs: list[str] = [""] * enter_target  # enter 결과를 idx 위치에 채움(원본 유지)
     # ticket 단계에서 실제로 채워진 queue_ref만 안전하게 고르기 위한 리스트
     # IMPORTANT: permit_token은 (show_id, user_id)에 바인딩되므로 queue_ref를 만든 user_id로만 commit해야 한다.
     queue_refs_ready: list[tuple[int, str]] = []
     refs_lock = Lock()
 
     def _enter_one(i: int):
+        if stop_event.is_set():
+            return i, False, 0, ""
         uid = int(args.user_base) + i
         # 네트워크/Pod 흔들림(refused 등)이 있어도 전체 테스트가 죽지 않게 재시도
         deadline = time.monotonic() + 15.0
         last_code = 0
         last_ref = ""
         while time.monotonic() < deadline:
+            if stop_event.is_set():
+                return i, False, last_code or 0, last_ref
             try:
                 code, j = http_w.concert_waiting_room_enter(
                     write_base, uid, show_id, timeout=min(10.0, timeout)
@@ -605,19 +657,64 @@ def main():
     fail_commit = 0
     ok_admit = 0
     fail_admit = 0
+    commit_attempts = 0
     accepted_refs: list[str] = []
+    accepted_ref_to_seat: dict[str, str] = {}
     refs_out_lock = Lock()
 
-    def _ticket_one(i: int):
+    # realistic 모드: admitted 된 사람 중 tickets_effective 명만 commit
+    seats_lock = Lock()
+    next_seat_idx = 0
+    tickets_left_lock = Lock()
+    tickets_left = int(tickets_effective)
+    think_time_ms = max(0, int(args.think_time_ms or 0))
+    max_per_user = max(0, int(args.max_tickets_per_user or 0))
+
+    def _alloc_seat() -> str:
+        nonlocal next_seat_idx
+        with seats_lock:
+            if next_seat_idx >= len(free_seats):
+                return ""
+            s = str(free_seats[next_seat_idx])
+            next_seat_idx += 1
+            return s
+
+    def _take_ticket_slot() -> bool:
+        nonlocal tickets_left
+        with tickets_left_lock:
+            if tickets_left <= 0:
+                return False
+            tickets_left -= 1
+            return True
+
+    def _planned_quota_for_user(i: int) -> int:
+        """
+        realistic 모드에서 유저당 커밋 시도 횟수(비율 기반 자동 배분).
+        예) entrants=100, tickets_effective=10000 -> base=100, rem=0 => 전원 100회
+        - --max-tickets-per-user > 0이면 그 값을 우선한다.
+        """
+        if max_per_user > 0:
+            return int(max_per_user)
         if entrants <= 0:
-            return False, "NO_ENTRANTS", ""
+            return 0
+        base = int(tickets_effective) // int(entrants)
+        rem = int(tickets_effective) % int(entrants)
+        return int(base + (1 if int(i) < rem else 0))
+
+    def _ticket_one(i: int):
+        if stop_event.is_set():
+            return False, "CANCELLED", "", ""
+        if enter_target <= 0:
+            return False, "NO_ENTRANTS", "", ""
         if i >= tickets_effective:
-            return False, "SKIP_NO_FREE_SEAT", ""
+            return False, "SKIP_NO_FREE_SEAT", "", ""
         # enter가 동시에 진행되므로, ref가 최소 1개는 준비될 때까지 잠깐 대기
         deadline_ref = time.monotonic() + 30.0
         qref = ""
         uid_for_ref = 0
         while time.monotonic() < deadline_ref:
+            if stop_event.is_set():
+                return False, "CANCELLED", "", ""
             with refs_lock:
                 ready = len(queue_refs_ready)
                 if ready > 0:
@@ -633,6 +730,8 @@ def main():
         permit = ""
         last_pos = 0
         while time.monotonic() < deadline:
+            if stop_event.is_set():
+                return False, "CANCELLED", "", ""
             try:
                 _, st = http_w.concert_waiting_room_status(
                     write_base, qref, timeout=min(10.0, timeout)
@@ -651,7 +750,7 @@ def main():
                 last_pos = 0
             time.sleep(0.4)
         if not permit:
-            return False, f"ADMIT_TIMEOUT(pos={last_pos})", ""
+            return False, f"ADMIT_TIMEOUT(pos={last_pos})", "", ""
 
         seat_key = free_seats[i]
         # 커밋도 순간 refused를 견디도록 짧게 재시도
@@ -659,6 +758,8 @@ def main():
         last_code = 0
         last_err = ""
         while time.monotonic() < commit_deadline:
+            if stop_event.is_set():
+                return False, "CANCELLED", "", seat_key
             try:
                 code, j = http_w.request_json(
                     f"{write_base}/api/write/concerts/booking/commit",
@@ -669,29 +770,279 @@ def main():
                 last_code = int(code or 0)
                 if last_code == 200 and (j or {}).get("ok") and str((j or {}).get("code") or "") == "QUEUED":
                     ref = str((j or {}).get("booking_ref") or "")
-                    return True, "QUEUED", ref
+                    return True, "QUEUED", ref, seat_key
                 # 논리 실패(중복좌석 등)는 재시도해도 의미 없으므로 바로 반환
-                return False, str((j or {}).get("code") or f"HTTP_{last_code}"), ""
+                return False, str((j or {}).get("code") or f"HTTP_{last_code}"), "", seat_key
             except Exception as e:
                 last_err = repr(e)
                 time.sleep(0.6)
-        return False, f"COMMIT_NET_FAIL(http={last_code} err={last_err[:120]})", ""
+        return False, f"COMMIT_NET_FAIL(http={last_code} err={last_err[:120]})", "", seat_key
+
+    def _realistic_flow_one(i: int):
+        """
+        실제 유저 행동 모델:
+        1) enter(show_id, user_id) → queue_ref
+        2) status(queue_ref) 폴링 → ADMITTED 되면 permit_token 획득
+        3) admitted 된 사람 중 tickets_effective 명만 commit 시도(나머지는 admitted 후 이탈)
+        """
+        # 반환 규약(집계용):
+        # {
+        #   "enter_ok": bool, "enter_http": int,
+        #   "admitted": bool, "admit_timeout": bool,
+        #   "commit_attempts": int, "commit_ok": int, "commit_fail": int,
+        #   "queued": [{"ref": str, "seat": str}], "fail_codes": {code: n},
+        #   "last": {"code": str, "seat": str}
+        # }
+        if stop_event.is_set():
+            return {
+                "enter_ok": False,
+                "enter_http": 0,
+                "admitted": False,
+                "admit_timeout": False,
+                "commit_attempts": 0,
+                "commit_ok": 0,
+                "commit_fail": 0,
+                "queued": [],
+                "fail_codes": {"CANCELLED": 1},
+                "last": {"code": "CANCELLED", "seat": ""},
+            }
+        uid = int(args.user_base) + int(i)
+
+        # 1) enter
+        idx, ok, enter_http, qref = _enter_one(int(i))
+        if not ok or not qref:
+            return {
+                "enter_ok": False,
+                "enter_http": int(enter_http or 0),
+                "admitted": False,
+                "admit_timeout": False,
+                "commit_attempts": 0,
+                "commit_ok": 0,
+                "commit_fail": 0,
+                "queued": [],
+                "fail_codes": {f"ENTER_FAIL_HTTP_{int(enter_http or 0)}": 1},
+                "last": {"code": f"ENTER_FAIL_HTTP_{int(enter_http or 0)}", "seat": ""},
+            }
+        queue_refs[idx] = qref
+
+        # 2) poll until admitted
+        deadline = time.monotonic() + admit_timeout
+        permit = ""
+        last_pos = 0
+        while time.monotonic() < deadline:
+            if stop_event.is_set():
+                return {
+                    "enter_ok": True,
+                    "enter_http": int(enter_http or 0),
+                    "admitted": False,
+                    "admit_timeout": False,
+                    "commit_attempts": 0,
+                    "commit_ok": 0,
+                    "commit_fail": 0,
+                    "queued": [],
+                    "fail_codes": {"CANCELLED": 1},
+                    "last": {"code": "CANCELLED", "seat": ""},
+                }
+            try:
+                _, st = http_w.concert_waiting_room_status(
+                    write_base, qref, timeout=min(10.0, timeout)
+                )
+            except Exception:
+                time.sleep(0.6)
+                continue
+            if isinstance(st, dict) and st.get("status") == "ADMITTED" and st.get("permit_token"):
+                permit = str(st.get("permit_token"))
+                break
+            try:
+                q = (st or {}).get("queue") if isinstance(st, dict) else None
+                last_pos = int((q or {}).get("position") or 0)
+            except Exception:
+                last_pos = 0
+            time.sleep(0.4)
+        if not permit:
+            return {
+                "enter_ok": True,
+                "enter_http": int(enter_http or 0),
+                "admitted": False,
+                "admit_timeout": True,
+                "commit_attempts": 0,
+                "commit_ok": 0,
+                "commit_fail": 0,
+                "queued": [],
+                "fail_codes": {f"ADMIT_TIMEOUT_POS_{int(last_pos)}": 1},
+                "last": {"code": f"ADMIT_TIMEOUT_POS_{int(last_pos)}", "seat": ""},
+            }
+
+        # 3) commit: admitted 된 유저는 "비율 기반 quota"만큼 여러 번 시도한다.
+        # NOTE: permit_token은 (show_id, user_id) 바인딩이므로 동일 유저 커밋에서는 재사용 가능(만료/정책은 서버가 판단).
+        quota = max(0, int(_planned_quota_for_user(int(i))))
+        commits_done = 0
+        ok_n = 0
+        fail_n = 0
+        queued: list[dict[str, str]] = []
+        fail_codes: dict[str, int] = {}
+        last_code = ""
+        last_seat = ""
+
+        while commits_done < quota:
+            if stop_event.is_set():
+                fail_codes["CANCELLED"] = fail_codes.get("CANCELLED", 0) + 1
+                last_code = "CANCELLED"
+                break
+            if not _take_ticket_slot():
+                break
+            seat_key = _alloc_seat()
+            last_seat = seat_key
+            if not seat_key:
+                fail_codes["NO_FREE_SEAT"] = fail_codes.get("NO_FREE_SEAT", 0) + 1
+                last_code = "NO_FREE_SEAT"
+                break
+
+            commit_deadline = time.monotonic() + 15.0
+            last_err = ""
+            while time.monotonic() < commit_deadline:
+                if stop_event.is_set():
+                    fail_codes["CANCELLED"] = fail_codes.get("CANCELLED", 0) + 1
+                    last_code = "CANCELLED"
+                    break
+                try:
+                    code, j = http_w.request_json(
+                        f"{write_base}/api/write/concerts/booking/commit",
+                        "POST",
+                        {"user_id": uid, "show_id": show_id, "seats": [seat_key], "permit_token": permit},
+                        timeout=timeout,
+                    )
+                    http_code = int(code or 0)
+                    api_code = str((j or {}).get("code") or f"HTTP_{http_code}")
+                    if http_code == 200 and (j or {}).get("ok") and api_code == "QUEUED":
+                        ref = str((j or {}).get("booking_ref") or "")
+                        if ref:
+                            queued.append({"ref": ref, "seat": str(seat_key)})
+                        commits_done += 1
+                        ok_n += 1
+                        last_code = "QUEUED"
+                        break
+                    # permit 만료/정책 등으로 429가 오면 status에서 permit을 한 번 더 갱신해본다.
+                    if http_code == 429 and api_code == "WAITING_ROOM_REQUIRED":
+                        try:
+                            _, st2 = http_w.concert_waiting_room_status(
+                                write_base, qref, timeout=min(10.0, timeout)
+                            )
+                            if isinstance(st2, dict) and st2.get("status") == "ADMITTED" and st2.get("permit_token"):
+                                permit = str(st2.get("permit_token"))
+                                time.sleep(0.3)
+                                continue
+                        except Exception:
+                            pass
+                    commits_done += 1
+                    fail_n += 1
+                    fail_codes[api_code] = fail_codes.get(api_code, 0) + 1
+                    last_code = api_code
+                    break
+                except Exception as e:
+                    last_err = repr(e)
+                    time.sleep(0.6)
+            else:
+                commits_done += 1
+                fail_n += 1
+                c = f"COMMIT_NET_FAIL({last_err[:120]})"
+                fail_codes[c] = fail_codes.get(c, 0) + 1
+                last_code = c
+
+            if think_time_ms > 0:
+                time.sleep(think_time_ms / 1000.0)
+
+        return {
+            "enter_ok": True,
+            "enter_http": int(enter_http or 0),
+            "admitted": True,
+            "admit_timeout": False,
+            "commit_attempts": int(ok_n + fail_n),
+            "commit_ok": int(ok_n),
+            "commit_fail": int(fail_n),
+            "queued": queued,
+            "fail_codes": fail_codes,
+            "last": {"code": str(last_code or ("ADMITTED_NO_TICKET" if quota <= 0 else "")), "seat": str(last_seat or "")},
+        }
 
     # enter + ticket 동시 실행
-    with ThreadPoolExecutor(max_workers=(enter_workers + ticket_workers)) as pool:
+    pool = ThreadPoolExecutor(max_workers=(enter_workers + ticket_workers))
+    try:
         fut_observe = None
         if observe_sec > 0 and cid_for_read > 0:
             fut_observe = pool.submit(_observe_holds_loop, "during")
-        futs_enter = [pool.submit(_enter_one, i) for i in range(entrants)]
-        futs_ticket = [pool.submit(_ticket_one, i) for i in range(tickets_effective)]
+
+        mode = str(args.mode).strip().lower()
+        if mode == "realistic":
+            # 유저별 파이프라인: enter→poll→(일부)commit
+            # 동시성은 enter_workers / ticket_workers 중 큰 값에 맞춰 pool 크기가 이미 확보되어 있음.
+            futs_flow = [pool.submit(_realistic_flow_one, i) for i in range(entrants)]
+            kind_by_future = {f: "flow" for f in futs_flow}
+            futs_enter = []
+            futs_ticket = []
+        else:
+            futs_enter = [pool.submit(_enter_one, i) for i in range(enter_target)]
+            futs_ticket = [pool.submit(_ticket_one, i) for i in range(tickets_effective)]
+            kind_by_future = {f: "enter" for f in futs_enter}
+            kind_by_future.update({f: "ticket" for f in futs_ticket})
 
         done_enter = 0
         done_ticket = 0
 
-        for fut in as_completed([*futs_enter, *futs_ticket]):
+        flow_fail_samples: list[dict[str, Any]] = []
+        for fut in as_completed([*futs_enter, *futs_ticket] if str(args.mode).strip().lower() != "realistic" else list(kind_by_future.keys())):
+            kind = kind_by_future.get(fut, "")
             res = fut.result()
-            # enter 결과는 4-tuple, ticket 결과는 2-tuple
-            if isinstance(res, tuple) and len(res) == 4:
+            if kind == "flow":
+                done_enter += 1
+                if isinstance(res, dict):
+                    enter_ok = bool(res.get("enter_ok"))
+                    if enter_ok:
+                        ok_enter += 1
+                    else:
+                        fail_enter += 1
+                    if bool(res.get("admitted")):
+                        ok_admit += 1
+                    elif bool(res.get("admit_timeout")):
+                        fail_admit += 1
+                    # commit attempts
+                    ca = int(res.get("commit_attempts") or 0)
+                    ck = int(res.get("commit_ok") or 0)
+                    cf = int(res.get("commit_fail") or 0)
+                    commit_attempts += ca
+                    ok_commit += ck
+                    fail_commit += cf
+                    # collect queued refs
+                    qlist = res.get("queued") if isinstance(res.get("queued"), list) else []
+                    if qlist:
+                        with refs_out_lock:
+                            for it in qlist:
+                                if not isinstance(it, dict):
+                                    continue
+                                ref = str(it.get("ref") or "")
+                                seat = str(it.get("seat") or "")
+                                if ref:
+                                    accepted_refs.append(ref)
+                                    if seat:
+                                        accepted_ref_to_seat[ref] = seat
+                    # sample failures for visibility
+                    if len(flow_fail_samples) < 5 and (cf > 0 or (not enter_ok) or bool(res.get("admit_timeout"))):
+                        flow_fail_samples.append({"idx": int(done_enter), "last": res.get("last"), "fail_codes": res.get("fail_codes")})
+                else:
+                    fail_commit += 1
+
+                if done_enter % progress_every == 0 or done_enter == entrants:
+                    elapsed = max(0.001, time.monotonic() - t_enter0)
+                    print(
+                        f"flow: {done_enter}/{entrants} enter_ok={ok_enter} enter_fail={fail_enter} "
+                        f"admitted_ok={ok_admit} admit_fail={fail_admit} "
+                        f"commit_ok={ok_commit} commit_fail={fail_commit} commit_attempts={commit_attempts} "
+                        f"qps={done_enter/elapsed:.1f}",
+                        file=sys.stderr,
+                    )
+                    if flow_fail_samples:
+                        print(f"[flow-sample-fails] {flow_fail_samples}", file=sys.stderr)
+            elif kind == "enter":
                 idx, ok, code, ref = res
                 done_enter += 1
                 if ok:
@@ -703,14 +1054,14 @@ def main():
                     fail_enter += 1
                     if fail_enter <= 5:
                         print(f"ENTER_FAIL http={code} i={idx}", file=sys.stderr)
-                if done_enter % progress_every == 0 or done_enter == entrants:
+                if done_enter % progress_every == 0 or done_enter == enter_target:
                     elapsed = max(0.001, time.monotonic() - t_enter0)
                     print(
-                        f"enter: {done_enter}/{entrants} ok={ok_enter} fail={fail_enter} qps={done_enter/elapsed:.1f}",
+                        f"enter: {done_enter}/{enter_target} ok={ok_enter} fail={fail_enter} qps={done_enter/elapsed:.1f}",
                         file=sys.stderr,
                     )
-            else:
-                ok, code, bref = res
+            elif kind == "ticket":
+                ok, code, bref, seat_key = res
                 done_ticket += 1
                 if ok:
                     ok_commit += 1
@@ -718,17 +1069,33 @@ def main():
                     if bref:
                         with refs_out_lock:
                             accepted_refs.append(bref)
+                            accepted_ref_to_seat[bref] = str(seat_key or "")
                 else:
                     if str(code).startswith("ADMIT_") or str(code).startswith("ADMIT_TIMEOUT"):
                         fail_admit += 1
                     else:
                         fail_commit += 1
-                if done_ticket % max(1, (progress_every // 5)) == 0 or done_ticket == tickets:
+                if done_ticket % max(1, (progress_every // 5)) == 0 or done_ticket == tickets_effective:
                     elapsed2 = max(0.001, time.monotonic() - t_ticket0)
                     print(
                         f"tickets: {done_ticket}/{tickets_effective} admitted_ok={ok_admit} admit_fail={fail_admit} commit_ok={ok_commit} commit_fail={fail_commit} qps={done_ticket/elapsed2:.1f}",
                         file=sys.stderr,
                     )
+            else:
+                # should never happen
+                continue
+    except KeyboardInterrupt:
+        stop_event.set()
+        print("[warn] KeyboardInterrupt: stopping early (partial results).", file=sys.stderr)
+    finally:
+        # 요청 중단 신호를 먼저 올린 뒤, 스레드가 빠져나오도록 잠깐 여유를 준다.
+        stop_event.set()
+        try:
+            time.sleep(0.2)
+        except Exception:
+            pass
+        # Cancel any futures not started yet; wait for running tasks to notice stop_event.
+        pool.shutdown(wait=True, cancel_futures=True)
 
     enter_sec = time.monotonic() - t_enter0
     ticket_sec = time.monotonic() - t_ticket0
@@ -747,14 +1114,22 @@ def main():
         t_poll0 = time.monotonic()
 
         def _poll_one(ref: str):
-            result = http_w.poll_booking_status(
-                write_base,
-                ref,
-                kind="concert",
-                timeout_sec=poll_timeout,
-                interval_sec=0.4,
-            )
-            ok2 = bool(isinstance(result, dict) and result.get("ok") is True and str(result.get("code") or "") == "OK")
+            try:
+                result = http_w.poll_booking_status(
+                    write_base,
+                    ref,
+                    kind="concert",
+                    timeout_sec=poll_timeout,
+                    interval_sec=0.4,
+                )
+                if not isinstance(result, dict):
+                    result = {"ok": False, "code": "BAD_RESPONSE", "raw": str(result)}
+            except Exception as e:
+                # 네트워크 흔들림/타임아웃은 개별 실패로 처리하고 전체 스크립트는 계속 진행한다.
+                result = {"ok": False, "code": "POLL_NET_FAIL", "message": repr(e)}
+            # poll 응답이 booking_ref를 포함하지 않는 경우가 있어, 항상 붙여서 로그/매핑이 가능하게 한다.
+            result.setdefault("booking_ref", str(ref))
+            ok2 = bool(result.get("ok") is True and str(result.get("code") or "") == "OK")
             return ok2, result
 
         inflight = len(accepted_refs)
@@ -772,13 +1147,11 @@ def main():
                     if polled_fail <= 5:
                         code = (result or {}).get("code") if isinstance(result, dict) else None
                         status = (result or {}).get("status") if isinstance(result, dict) else None
-                        print(f"POLL_FAIL code={code} status={status}", file=sys.stderr)
-                if done2 % max(1, (progress_every // 5)) == 0 or done2 == inflight:
-                    elapsed2 = max(0.001, time.monotonic() - t_poll0)
-                    print(
-                        f"poll: {done2}/{inflight} ok={polled_ok} fail={polled_fail} qps={done2/elapsed2:.1f}",
-                        file=sys.stderr,
-                    )
+                        ref = (result or {}).get("booking_ref") if isinstance(result, dict) else None
+                        ref = str(ref or "") or "(no_ref)"
+                        seat = accepted_ref_to_seat.get(ref, "")
+                        seat_part = f" seat={seat}" if seat else ""
+                        print(f"POLL_FAIL ref={ref}{seat_part} code={code} status={status} result={result}", file=sys.stderr)
         poll_sec = time.monotonic() - t_poll0
 
     # 3) (옵션) WR backlog 드레인: 다음 진입에서 대기열이 남지 않게 한다.
@@ -843,6 +1216,7 @@ def main():
         "permit_admitted_fail_est": fail_admit,
         "commit_queued_ok": ok_commit,
         "commit_fail": fail_commit,
+        "commit_attempts": int(commit_attempts),
         "ticket_phase_sec": round(ticket_sec, 3),
         "wait": bool(args.wait),
         "polled_ok": int(polled_ok),

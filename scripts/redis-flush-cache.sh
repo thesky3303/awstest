@@ -93,11 +93,26 @@ CACHE_DB="${CACHE_DB:-0}"
 
 echo "Flushing Redis cache DB (ns=${NS} host=${REDIS_HOST} port=${REDIS_PORT} db=${CACHE_DB})"
 
-# Run redis-cli inside the cluster, then delete the pod automatically.
-kubectl -n "$NS" run redis-cli-flush-cache \
-  --rm -i --restart=Never \
+# If the pod already exists (e.g. previous run got stuck), delete and recreate.
+POD_NAME="redis-cli-flush-cache"
+if kubectl -n "$NS" get pod "$POD_NAME" >/dev/null 2>&1; then
+  echo "Found existing pod ${POD_NAME}. Deleting..."
+  kubectl -n "$NS" delete pod "$POD_NAME" --ignore-not-found --wait=true >/dev/null
+fi
+
+# Create a fresh pod and run redis-cli inside it.
+kubectl -n "$NS" run "$POD_NAME" \
+  --restart=Never \
   --image=redis:7-alpine \
-  --command -- sh -lc \
-  "redis-cli -h '${REDIS_HOST}' -p '${REDIS_PORT}' -n '${CACHE_DB}' FLUSHDB"
+  --command -- sh -lc "sleep 3600" >/dev/null
+
+kubectl -n "$NS" wait --for=condition=Ready "pod/${POD_NAME}" --timeout=60s >/dev/null
+
+# Run non-interactively so the script always returns to prompt.
+# (Some environments keep stdin open with `-i` and appear to "hang" after OK.)
+kubectl -n "$NS" exec "$POD_NAME" -- sh -lc \
+  "redis-cli -h '${REDIS_HOST}' -p '${REDIS_PORT}' -n '${CACHE_DB}' FLUSHDB" </dev/null
+
+kubectl -n "$NS" delete pod "$POD_NAME" --ignore-not-found --wait=true >/dev/null
 
 echo "Done."

@@ -8,6 +8,10 @@ bash ../scripts/img.sh
 
 bash ../scripts/tools-once-setup.sh
 
+WORKER_DEMO_DELAY_ENABLED=true
+WORKER_DEMO_DELAY_MS=1500
+WORKER_DEMO_DELAY_JITTER_MS=500
+
 bash ../scripts/worker-autoscale-on.sh
 
 bash ../scripts/worker-autoscale-off.sh
@@ -20,7 +24,7 @@ kubectl -n ticketing rollout restart deploy/write-api
 kubectl -n ticketing exec -it tools-once -- sh -lc '
 cd /work/ticketing-db/terraform &&
 WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" \
-python3 ../scripts/sqs_load_real_concert3.py --show-id 8 -E 1 -T 20'
+python3 ../scripts/sqs_load_real_concert3.py --show-id 8 -E 1 -T 10'
 
 
 

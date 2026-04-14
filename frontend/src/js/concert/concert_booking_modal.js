@@ -147,8 +147,7 @@
 
   function createSeatLabel(row, col) {
     const rowNo = toInt(row);
-    const rowLabel = rowNo === 1 ? 'A열' : rowNo === 2 ? 'B열' : rowNo === 3 ? 'C열' : `${rowNo}열`;
-    return `${rowLabel} ${col}번`;
+    return `${rowNo}열 ${col}번`;
   }
 
   async function requestConcertBooking(payload) {
@@ -209,6 +208,11 @@
     const seatRows = Math.max(1, toInt(show.seat_rows) || 5);
     let remainCount = Math.max(0, toInt(show.remain_count || 0));
     let totalCount = Math.max(0, toInt(show.total_count || 0)) || seatRows * seatCols;
+    // UI 표시용 잔여/전체 좌석 수는 "모달 진입 시점"을 기준으로 고정한다.
+    // 실시간 폴링은 좌석(hold/confirmed) 상태를 보여주기 위한 것이고,
+    // 잔여 숫자 자체는 출렁이는 UX를 만들기 쉬워 표시를 분리한다.
+    let displayRemainBase = remainCount;
+    let displayTotalBase = totalCount;
     const price = Math.max(0, toInt(show.price || 0));
     const showId = toInt(show.show_id);
 
@@ -364,15 +368,29 @@
     }
 
     const wrUi = createWaitingRoomOverlay();
-    overlay.appendChild(wrUi.wrap);
+    let wrVisible = false;
+
+    function showWaitingRoomOverlay() {
+      if (wrVisible) return;
+      if (wrUi && wrUi.wrap && overlay) {
+        overlay.appendChild(wrUi.wrap);
+        wrVisible = true;
+      }
+    }
+
+    function hideWaitingRoomOverlay() {
+      if (!wrVisible) return;
+      if (wrUi && wrUi.wrap) wrUi.wrap.remove();
+      wrVisible = false;
+    }
 
     function updateRemainTotalDisplay() {
       if (remainNode) {
-        remainNode.textContent = String(Math.max(0, remainCount - selectedSeats.size));
+        remainNode.textContent = String(Math.max(0, displayRemainBase - selectedSeats.size));
       }
       const totalSpan = remainNode && remainNode.nextElementSibling;
       if (totalSpan && totalSpan.tagName === 'SPAN') {
-        totalSpan.textContent = `/${String(totalCount)}`;
+        totalSpan.textContent = `/${String(displayTotalBase)}`;
       }
     }
 
@@ -420,8 +438,10 @@
       updateSummary();
     }
 
-    function applyBookingHoldsPayload(light) {
+    function applyBookingHoldsPayload(light, options) {
       if (!light || !light.ok) return false;
+      const opt = options && typeof options === 'object' ? options : {};
+      const updateDisplayCounts = opt.updateDisplayCounts === true;
       // remain은 단일 카운터(서버)만 신뢰한다.
       if (Number.isFinite(Number(light.remain_count))) {
         remainCount = Math.max(0, toInt(light.remain_count));
@@ -429,9 +449,19 @@
       if (Number.isFinite(Number(light.snapshot_total_count)) && toInt(light.snapshot_total_count) > 0) {
         totalCount = toInt(light.snapshot_total_count);
       }
+      if (updateDisplayCounts) {
+        displayRemainBase = remainCount;
+        displayTotalBase = totalCount;
+      }
       if (Array.isArray(light.confirmed_seats)) {
-        confirmedSeats.clear();
-        light.confirmed_seats.forEach((k) => confirmedSeats.add(String(k)));
+        // booking-holds의 confirmed_seats가 일시적으로 빈 배열로 내려오면(조회 오류/지연 등)
+        // 이미 회색으로 잠긴 좌석이 흰색으로 "풀려 보이는" UX가 생길 수 있다.
+        // 기존 confirmedSeats가 있고, 새 payload가 빈 배열이면 기존 값을 유지한다.
+        const next = light.confirmed_seats.map((k) => String(k));
+        if (next.length > 0 || confirmedSeats.size === 0) {
+          confirmedSeats.clear();
+          next.forEach((k) => confirmedSeats.add(k));
+        }
       }
       // cache/holds 기능이 꺼진 환경에서는 booking-holds가 hold_seats/confirmed_seats를 내려주지 않을 수 있다.
       // 그 경우 기존(bootstrap 기반) 좌석 상태를 유지해, 빈 배열로 덮어쓰며 좌석이 "풀려 보이는" 문제를 막는다.
@@ -465,7 +495,7 @@
         if (mySeq !== holdPollSeq) return;
         const rev = light && Number.isFinite(Number(light.hold_rev)) ? Number(light.hold_rev) : 0;
         if (rev === lastAppliedHoldRev) return;
-        applyBookingHoldsPayload(light);
+        applyBookingHoldsPayload(light, { updateDisplayCounts: false });
         lastAppliedHoldRev = rev;
         Object.assign(show, { remain_count: remainCount, total_count: totalCount });
       } catch (e) {
@@ -490,7 +520,7 @@
           cache: 'no-store',
           query: { show_id: showId }
         });
-        if (applyBookingHoldsPayload(light)) {
+        if (applyBookingHoldsPayload(light, { updateDisplayCounts: true })) {
           if (Number.isFinite(Number(light.hold_rev))) {
             lastAppliedHoldRev = Number(light.hold_rev);
           }
@@ -587,6 +617,18 @@
         return permitToken;
       }
 
+      // "대기열" UI는 즉시 띄우지 말고 잠깐 지연 후에도 admit이 안 되면 그때만 보여준다(깜빡임 방지).
+      let wrTimer = null;
+      try {
+        wrTimer = setTimeout(() => {
+          if (!waitingRoomReady) {
+            showWaitingRoomOverlay();
+          }
+        }, 250);
+      } catch (e) {
+        wrTimer = null;
+      }
+
       // 1) enter (네트워크 일시 장애는 재시도)
       if (!waitingRoomRef) {
         const enterDeadline = Date.now() + 30_000;
@@ -602,11 +644,14 @@
               break;
             }
           } catch (e) {
+            // 실제로 대기열 단계가 필요할 때만 오버레이를 보여준다.
+            showWaitingRoomOverlay();
             if (wrUi.msg) wrUi.msg.textContent = '서버 연결이 불안정합니다. 재시도 중…';
           }
           await new Promise((r) => setTimeout(r, 500));
         }
         if (!waitingRoomRef) {
+          if (wrTimer) clearTimeout(wrTimer);
           throw new Error('서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
         }
       }
@@ -627,6 +672,7 @@
           st = await waitingRoomStatus(waitingRoomRef);
           pollMs = BASE_POLL_MS;
         } catch (e) {
+          showWaitingRoomOverlay();
           if (wrUi.msg) wrUi.msg.textContent = '서버 연결이 불안정합니다. 재시도 중…';
           pollMs = Math.min(MAX_POLL_MS, Math.floor(pollMs * 1.6));
           await new Promise((r) => setTimeout(r, pollMs));
@@ -636,13 +682,16 @@
         if (st && st.status === 'ADMITTED' && st.permit_token) {
           permitToken = String(st.permit_token);
           waitingRoomReady = true;
+          if (wrTimer) clearTimeout(wrTimer);
           await refreshSeatSnapshotAfterWaitingRoom();
           startHoldRevPoll();
           setSeatUiEnabled(true);
-          if (wrUi.wrap) wrUi.wrap.remove();
+          hideWaitingRoomOverlay();
           return permitToken;
         }
 
+        // 아직 admit이 아니면(대기열 순번이 생기든, 그냥 대기 중이든) 오버레이를 보여준다.
+        showWaitingRoomOverlay();
         const q = st && st.queue ? st.queue : null;
         const position = q && Number.isFinite(Number(q.position)) ? Number(q.position) : 0;
         const ahead = q && Number.isFinite(Number(q.ahead)) ? Number(q.ahead) : Math.max(0, position - 1);
@@ -691,6 +740,7 @@
         const jitter = Math.floor(Math.random() * 180);
         await new Promise((r) => setTimeout(r, Math.min(MAX_POLL_MS, pollMs) + jitter));
       }
+      if (wrTimer) clearTimeout(wrTimer);
       throw new Error('대기열 처리 시간이 초과되었습니다.');
     }
 
@@ -719,7 +769,7 @@
 
         const rowLabel = document.createElement('div');
         rowLabel.className = 'theaters-detail-seat-row-label';
-        rowLabel.textContent = row === 1 ? 'A열' : row === 2 ? 'B열' : row === 3 ? 'C열' : `${row}열`;
+        rowLabel.textContent = `${row}열`;
         rowWrap.appendChild(rowLabel);
 
         const rowSeats = document.createElement('div');
@@ -836,7 +886,7 @@
 
       const rowLabel = document.createElement('div');
       rowLabel.className = 'theaters-detail-seat-row-label';
-      rowLabel.textContent = 'A열';
+      rowLabel.textContent = '1열';
       rowWrap.appendChild(rowLabel);
 
       const rowSeats = document.createElement('div');
@@ -848,7 +898,7 @@
       seatGrid.appendChild(rowWrap);
 
       function getRowLabel(row) {
-        return row === 1 ? 'A열' : row === 2 ? 'B열' : row === 3 ? 'C열' : `${row}열`;
+        return `${row}열`;
       }
 
       function renderRowButtons() {
@@ -1071,7 +1121,9 @@
             show_id: showId,
             seats: Array.from(selectedSeats)
             ,
-            permit_token: permit
+            permit_token: permit,
+            // permit TTL 만료/중복좌석 재시도 시, 서버가 status(queue_ref)로 즉시 새 permit 발급해 우선 처리할 수 있게 전달
+            queue_ref: waitingRoomRef
           });
 
           let result = commit;
@@ -1158,8 +1210,14 @@
               lastResult = { ok: false, message: '좌석 정보가 올바르지 않습니다. 새로고침 후 다시 시도해주세요.' };
             } else if (code === 'NO_SEATS') {
               lastResult = { ok: false, message: '좌석을 선택해주세요.' };
+            } else if (code === 'DUPLICATE_SEAT' || code === 'CONFIRMED_SEAT') {
+              lastResult = { ok: false, message: '중복좌석입니다.' };
+            } else if (code === 'SOLD_OUT') {
+              lastResult = { ok: false, message: '매진입니다.' };
             } else if (code === 'SALES_CLOSED') {
               lastResult = { ok: false, message: '모든 투표가 마감되었습니다.' };
+            } else if (code === 'WAITING_ROOM_REQUIRED') {
+              lastResult = { ok: false, message: '대기열 처리 중입니다. 잠시 후 다시 시도해주세요.' };
             } else {
               lastResult = { ok: false, message: '요청값이 올바르지 않습니다.' };
             }

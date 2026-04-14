@@ -32,7 +32,13 @@ echo "KEDA destroy-cleanup: ns=$NS release=$REL wait=${WAIT_SEC}s" >&2
 if command -v helm >/dev/null 2>&1; then
   if helm -n "$NS" status "$REL" >/dev/null 2>&1; then
     echo "Uninstalling helm release $NS/$REL ..." >&2
-    helm -n "$NS" uninstall "$REL" --wait --timeout 15m >/dev/null 2>&1 || true
+    # IMPORTANT: terraform destroy가 10분 기본 타임아웃에 걸리지 않게,
+    # helm uninstall은 WAIT_SEC 안에 끝나도록 강제 제한한다.
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "${WAIT_SEC}s" helm -n "$NS" uninstall "$REL" --timeout "${WAIT_SEC}s" >/dev/null 2>&1 || true
+    else
+      helm -n "$NS" uninstall "$REL" --timeout "${WAIT_SEC}s" >/dev/null 2>&1 || true
+    fi
   fi
 fi
 

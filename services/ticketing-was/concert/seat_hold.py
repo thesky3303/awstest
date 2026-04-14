@@ -4,11 +4,17 @@ import json
 import time
 from typing import Dict, List, Tuple
 
+import pymysql
 from cache.redis_client import redis_client
 from config import (
     CONCERT_CONFIRMED_SET_TTL_SEC,
     CONCERT_SEAT_HOLD_TTL_SEC,
     CONCERT_SEAT_HOLD_SOLDOUT_TTL_SEC,
+    DB_HOST,
+    DB_NAME,
+    DB_PASSWORD,
+    DB_PORT,
+    DB_USER,
 )
 
 
@@ -16,8 +22,9 @@ def _seat_key(show_id: int, row: int, col: int) -> str:
     return f"concert:seat:{int(show_id)}:{int(row)}-{int(col)}:hold:v1"
 
 
-def _remain_key(show_id: int) -> str:
-    # remain 단일 카운터(단일 진실). read는 이 값만 신뢰한다.
+def _remain_count_key(show_id: int) -> str:
+    # remain_count 단일 카운터(단일 진실). read는 이 값만 신뢰한다.
+    # 주의: Redis key suffix는 레거시 호환을 위해 ':remain:v1'를 유지한다.
     return f"concert:show:{int(show_id)}:remain:v1"
 
 
@@ -30,10 +37,32 @@ end
 return v
 """
 
+_REMAIN_DECR_IF_ENOUGH_LUA = """
+local cur = redis.call('GET', KEYS[1])
+if not cur then
+  cur = 0
+else
+  cur = tonumber(cur) or 0
+end
+local n = tonumber(ARGV[1]) or 0
+if n <= 0 then
+  return cur
+end
+if cur < n then
+  return -1
+end
+local v = redis.call('DECRBY', KEYS[1], n)
+if v < 0 then
+  redis.call('SET', KEYS[1], 0)
+  v = 0
+end
+return v
+"""
+
 
 def adjust_remain(*, show_id: int, delta: int, ttl_sec: int | None = None) -> int:
     """
-    remain 카운터를 원자적으로 조정한다.
+    remain_count 카운터를 원자적으로 조정한다.
     - delta < 0 : 차감(hold/pending)
     - delta > 0 : 복구(실패/취소/만료 롤백)
     """
@@ -42,12 +71,12 @@ def adjust_remain(*, show_id: int, delta: int, ttl_sec: int | None = None) -> in
     if sid <= 0 or d == 0:
         return 0
     try:
-        v = int(redis_client.eval(_REMAIN_ADJUST_LUA, 1, _remain_key(sid), d) or 0)
+        v = int(redis_client.eval(_REMAIN_ADJUST_LUA, 1, _remain_count_key(sid), d) or 0)
         # remain은 hold/pending과 연동되는 운영 카운터이므로 누적 방지용 TTL을 옵션으로 지원
         try:
             ttl = int(ttl_sec or 0)
             if ttl > 0:
-                redis_client.expire(_remain_key(sid), ttl)
+                redis_client.expire(_remain_count_key(sid), ttl)
         except Exception:
             pass
         if int(v) <= 0 and d < 0:
@@ -55,6 +84,42 @@ def adjust_remain(*, show_id: int, delta: int, ttl_sec: int | None = None) -> in
         return v
     except Exception:
         return 0
+
+
+def try_decrease_remain_if_enough(*, show_id: int, count: int, ttl_sec: int | None = None) -> tuple[bool, int]:
+    """
+    remain_count가 충분할 때만 원자적으로 차감한다.
+    - 성공: (True, remain_after)
+    - 부족: (False, current_remain)  (Lua에서 -1로 signal)
+    """
+    sid = int(show_id or 0)
+    n = int(count or 0)
+    if sid <= 0 or n <= 0:
+        return False, 0
+    try:
+        v = int(redis_client.eval(_REMAIN_DECR_IF_ENOUGH_LUA, 1, _remain_count_key(sid), n) or 0)
+        if v < 0:
+            # not enough
+            try:
+                cur = int(redis_client.get(_remain_count_key(sid)) or 0)
+            except Exception:
+                cur = 0
+            return False, max(0, int(cur))
+        try:
+            ttl = int(ttl_sec or 0)
+            if ttl > 0:
+                redis_client.expire(_remain_count_key(sid), ttl)
+        except Exception:
+            pass
+        if int(v) <= 0:
+            _expire_hold_cache_on_soldout(show_id=sid)
+        return True, int(v)
+    except Exception:
+        try:
+            cur = int(redis_client.get(_remain_count_key(sid)) or 0)
+        except Exception:
+            cur = 0
+        return False, max(0, int(cur))
 
 
 def _expire_hold_cache_on_soldout(*, show_id: int) -> None:
@@ -74,7 +139,7 @@ def _expire_hold_cache_on_soldout(*, show_id: int) -> None:
         pipe = redis_client.pipeline()
         pipe.expire(_hold_set_key(sid), ttl)
         pipe.expire(_hold_rev_key(sid), ttl)
-        pipe.expire(_remain_key(sid), ttl)
+        pipe.expire(_remain_count_key(sid), ttl)
         pipe.execute()
     except Exception:
         pass
@@ -206,19 +271,57 @@ def any_confirmed(*, show_id: int, seats: List[Tuple[int, int]]) -> bool:
     try:
         raw = redis_client.get(f"concert:show:{int(show_id)}:read:v2")
         if not raw:
-            return False
+            raise ValueError("no snapshot")
         snap = json.loads(raw)
         if not isinstance(snap, dict):
-            return False
+            raise ValueError("bad snapshot")
         confirmed = snap.get("confirmed_seats")
         if not isinstance(confirmed, list) or not confirmed:
-            return False
+            raise ValueError("empty confirmed")
         confirmed_set = {str(x) for x in confirmed}
         for r, c in seats:
             if f"{int(r)}-{int(c)}" in confirmed_set:
                 return True
     except Exception:
-        return False
+        # 최후 가드: DB ACTIVE 좌석을 직접 확인한다.
+        # reset 등으로 confirmed set/스냅샷이 비어있는 상태에서 write가 들어오면,
+        # Redis hold가 DB 확정을 모르고 중복 홀드를 허용할 수 있다.
+        # 이 경우 worker에서 IntegrityError(DUPLICATE_SEAT)가 대량으로 발생하므로,
+        # write(hold) 단계에서 DB를 확인해 조기에 차단한다.
+        try:
+            conn = pymysql.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+                charset="utf8mb4",
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+            )
+            with conn.cursor() as cur:
+                clauses = []
+                params: list[int] = [int(show_id)]
+                for r, c in seats:
+                    clauses.append("(seat_row_no=%s AND seat_col_no=%s)")
+                    params.extend([int(r), int(c)])
+                where_seats = " OR ".join(clauses) if clauses else "1=0"
+                cur.execute(
+                    "SELECT 1 FROM concert_booking_seats "
+                    "WHERE show_id=%s AND UPPER(COALESCE(status,''))='ACTIVE' AND ("
+                    + where_seats +
+                    ") LIMIT 1",
+                    tuple(params),
+                )
+                row = cur.fetchone()
+                return bool(row)
+        except Exception:
+            return False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     return False
 
 
@@ -232,6 +335,7 @@ def try_hold_seats(
     seats: List[Tuple[int, int]],
     booking_ref: str,
     ttl_sec: int | None = None,
+    adjust_remain_count: bool = True,
 ) -> Dict:
     """
     좌석을 Redis에서 선점(접수 확정)한다.
@@ -284,8 +388,10 @@ def try_hold_seats(
     else:
         pipe2.set(_hold_meta_key(booking_ref), json.dumps(meta, ensure_ascii=False))
     pipe2.execute()
-    # remain 카운터 단일 차감(hold 수량만큼)
-    adjust_remain(show_id=show_id, delta=-len(held), ttl_sec=ttl)
+    # Redis remain 카운터는 홀드 시점에 즉시 차감(UX).
+    # (트랜스크립트 상 "아까 잘 되던" 방식)
+    if adjust_remain_count:
+        adjust_remain(show_id=show_id, delta=-len(held), ttl_sec=ttl)
     bump_hold_revision(show_id)
     return {"ok": True, "code": "HELD", "ttl_sec": ttl}
 
@@ -308,9 +414,8 @@ def release_seats(*, show_id: int, seats: List[Tuple[int, int]], booking_ref: st
             pipe2.srem(set_key, f"{int(r)}-{int(c)}")
             released += 1
     pipe2.execute()
-    # hold 롤백(실패/만료 등)에서 호출되는 경로: remain 복구
     if released > 0:
-        adjust_remain(show_id=show_id, delta=released)
+        adjust_remain(show_id=show_id, delta=int(released))
     bump_hold_revision(show_id)
 
 

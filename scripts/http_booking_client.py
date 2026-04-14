@@ -207,7 +207,13 @@ def poll_booking_status(
     deadline = time.monotonic() + timeout_sec
     last: dict = {}
     while time.monotonic() < deadline:
-        _, last = booking_status_get(base, booking_ref, kind, timeout=min(30.0, timeout_sec))
+        # 각 GET은 짧게(기본 5초) 타임아웃해, 일부 네트워크 지연이 전체 폴링을 오래 막지 않게 한다.
+        try:
+            _, last = booking_status_get(base, booking_ref, kind, timeout=min(5.0, timeout_sec))
+        except urllib.error.URLError:
+            # 일시 네트워크 오류는 폴링을 계속한다.
+            time.sleep(min(1.0, interval_sec))
+            continue
         if is_terminal_booking_status(last):
             return last
         time.sleep(interval_sec)

@@ -42,6 +42,9 @@ class _NoopRedisClient:
   def set(self, key: str, value: Any, *args: Any, **kwargs: Any) -> bool:
     return True
 
+  def setnx(self, key: str, value: Any) -> bool:
+    return True
+
   def setex(self, key: str, ttl_seconds: int, value: Any) -> bool:
     return True
 
@@ -83,6 +86,10 @@ class _NoopRedisClient:
 
   def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any:
     return None
+
+  def scan_iter(self, *args: Any, **kwargs: Any):
+    # behave as empty iterator
+    return iter(())
 
 
 class _SafeRedisPipeline:
@@ -134,6 +141,16 @@ class _SafeRedisClient:
   def set(self, key: str, value: Any, *args: Any, **kwargs: Any) -> bool:
     try:
       return bool(self._inner.set(key, value, *args, **kwargs))
+    except Exception:
+      return True
+
+  def setnx(self, key: str, value: Any) -> bool:
+    """
+    Redis SETNX 호환.
+    redis-py에서는 set(name, value, nx=True)로 구현되므로 그 형태로 위임한다.
+    """
+    try:
+      return bool(self._inner.set(key, value, nx=True))
     except Exception:
       return True
 
@@ -215,6 +232,16 @@ class _SafeRedisClient:
       return self._inner.eval(script, int(numkeys), *keys_and_args)
     except Exception:
       return None
+
+  def scan_iter(self, *args: Any, **kwargs: Any):
+    """
+    redis-py scan_iter passthrough.
+    reset/maintenance code relies on this to delete patterned keys safely.
+    """
+    try:
+      return self._inner.scan_iter(*args, **kwargs)
+    except Exception:
+      return iter(())
 
 
 if not CACHE_ENABLED:
