@@ -9,6 +9,7 @@ from cors_ensure_middleware import EnsureCrossOriginCredentialsMiddleware
 from auth.auth_user_read import router as auth_user_read_router
 from concert.concert_read import router as concert_read_router
 from concert.concert_read_cache import warmup_concert_caches
+from concert.concert_startup_reconcile import reconcile_concert_remain_on_startup
 from movie.movie_cache_builder import rebuild_movie_cache
 from movie.movie_read import router as movie_read_router
 from theater.theaters_cache_builder import rebuild_theaters_cache
@@ -94,6 +95,12 @@ async def lifespan(app: FastAPI):
     )
 
     repeat_task: asyncio.Task | None = None
+
+    # 개발/재배포 시 DB 기준 remain 동기화(좌석 예매 건수 기반)
+    try:
+        await asyncio.to_thread(reconcile_concert_remain_on_startup)
+    except Exception:
+        log.exception("startup remain reconcile failed")
 
     if CACHE_ENABLED and CACHE_WARMUP_ENABLED:
         from config import CACHE_WARMUP_REPEAT_LIGHT

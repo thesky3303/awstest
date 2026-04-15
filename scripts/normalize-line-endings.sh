@@ -35,6 +35,13 @@ normalize_glob "$ROOT_DIR/k8s/scripts/"'*.sh'
 normalize_glob "$ROOT_DIR/terraform/scripts/"'*.sh'
 normalize_glob "$ROOT_DIR/scripts/"'*.sh'
 
+# scripts/**/**/*.sh (locust 등 하위 폴더 포함)
+if [ -d "$ROOT_DIR/scripts" ]; then
+  while IFS= read -r -d '' f; do
+    normalize_file "$f"
+  done < <(find "$ROOT_DIR/scripts" -type f -name '*.sh' -print0 2>/dev/null || true)
+fi
+
 # terraform/modules/*/scripts/*.sh (eks, network 등)
 if [ -d "$ROOT_DIR/terraform/modules" ]; then
   while IFS= read -r -d '' f; do

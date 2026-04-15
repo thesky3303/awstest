@@ -4,6 +4,7 @@
       유저별 그룹(show_id-user_id)으로 분리해 동일 회차라도 타 유저 대량 적체에 GUI 예매가 묻히지 않게 함(DB는 FOR UPDATE 로 좌석 정합성 유지).
 """
 import json
+import logging
 import uuid
 import secrets
 import string
@@ -12,6 +13,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from config import BOOKING_QUEUE_COUNTER_TTL_SEC, DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
+from config import CACHE_ENABLED
 from sqs_client import get_booking_status_dict, send_booking_message
 from concert.sale_state import get_sale_state, set_sale_state
 from concert.seat_hold import release_seats, try_hold_seats
@@ -27,6 +29,8 @@ from waiting_room import (
 )
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
 
 # NOTE: Local synchronous fallback removed (EKS-only).
 
@@ -185,6 +189,98 @@ def _reset_concert_redis_seat_state(*, show_id: int) -> dict:
         "seeded_remain_count": int(seeded_remain),
     }
 
+
+def _reconcile_concert_redis_state_from_db(*, show_id: int) -> dict:
+    """
+    개발/재배포 시 DB를 기준으로 Redis(좌석 상태/잔여/confirmed)를 재구축한다.
+    목적:
+    - Redis에 남아있는 CONFIRMED/hold/remain 등이 DB와 불일치해 "빈좌석/매진"이 잘못 보이는 문제를 해소
+
+    동작:
+    - (1) Redis의 show_id 관련 좌석 상태 키들을 정리(reset과 유사)
+    - (2) DB ACTIVE 좌석을 조회해 Redis confirmed set을 재작성
+    - (3) DB total - confirmed - (DB holds) 로 remain을 계산해 Redis remain 카운터를 overwrite
+    """
+    sid = int(show_id or 0)
+    if sid <= 0:
+        return {"ok": False, "code": "BAD_SHOW_ID"}
+
+    # 1) 먼저 Redis 키들을 정리
+    base = _reset_concert_redis_seat_state(show_id=sid)
+    if not base.get("ok"):
+        return base
+
+    total = 0
+    confirmed_keys: list[str] = []
+    holds_n = 0
+    conn = _get_tx_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT total_count FROM concert_shows WHERE show_id=%s LIMIT 1", (sid,))
+            row0 = cur.fetchone() or {}
+            total = int(row0.get("total_count") or 0)
+
+            cur.execute(
+                "SELECT seat_row_no, seat_col_no FROM concert_booking_seats "
+                "WHERE show_id=%s AND UPPER(COALESCE(status,''))='ACTIVE' "
+                "ORDER BY seat_row_no ASC, seat_col_no ASC",
+                (sid,),
+            )
+            rows = cur.fetchall() or []
+            confirmed_keys = [f\"{int(r['seat_row_no'])}-{int(r['seat_col_no'])}\" for r in rows]
+
+            # DB holds(폴백 테이블)가 남아있을 수 있음(과거 Redis OFF 실행/테스트)
+            try:
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM concert_seat_holds "
+                    "WHERE show_id=%s AND (expires_at IS NULL OR expires_at > NOW())",
+                    (sid,),
+                )
+                holds_n = int((cur.fetchone() or {}).get("n") or 0)
+            except Exception:
+                holds_n = 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # 2) confirmed set 재작성
+    confirmed_added = 0
+    try:
+        if confirmed_keys:
+            sk = f"concert:confirmed:{sid}:v1"
+            pipe = redis_client.pipeline()
+            pipe.delete(sk)
+            pipe.sadd(sk, *[str(x) for x in confirmed_keys])
+            pipe.execute()
+            confirmed_added = len(confirmed_keys)
+    except Exception:
+        confirmed_added = 0
+
+    # 3) remain 카운터 overwrite (DB 기반 계산)
+    try:
+        remain = max(0, int(total) - int(len(confirmed_keys)) - int(holds_n))
+    except Exception:
+        remain = 0
+    try:
+        redis_client.set(f"concert:show:{sid}:remain:v1", int(remain))
+    except Exception:
+        pass
+
+    out = dict(base)
+    out.update(
+        {
+            "reconciled": True,
+            "total_count_db": int(total),
+            "confirmed_from_db": int(len(confirmed_keys)),
+            "holds_from_db": int(holds_n),
+            "confirmed_set_written": int(confirmed_added),
+            "remain_written": int(remain),
+        }
+    )
+    return out
+
 def _pending_key(show_id: int) -> str:
     return f"concert:show:{int(show_id)}:pending:v1"
 
@@ -236,12 +332,15 @@ def _db_any_active_seat(*, show_id: int, seats: list[tuple[int, int]]) -> bool:
     """
     DB 단일 진실: 이미 ACTIVE(확정) 좌석이 있으면 write 단계에서 조기 차단한다.
     - confirmed set/스냅샷이 reset 등으로 비어 있어도, DB는 항상 최종 근거다.
+    - DB 조회 실패 시 False를 돌려 실패를 숨기면( fail-open ) 홀드·QUEUED 후 워커에서만 DUPLICATE_SEAT가
+      대량 발생할 수 있으므로, 예외는 로깅 후 그대로 전파한다.
     """
     sid = int(show_id or 0)
     if sid <= 0 or not seats:
         return False
-    conn = _get_tx_connection()
+    conn = None
     try:
+        conn = _get_tx_connection()
         with conn.cursor() as cur:
             clauses = []
             params: list[int] = [sid]
@@ -257,13 +356,15 @@ def _db_any_active_seat(*, show_id: int, seats: list[tuple[int, int]]) -> bool:
                 tuple(params),
             )
             return bool(cur.fetchone())
-    except Exception:
-        return False
+    except pymysql.err.Error:
+        log.exception("concert write: ACTIVE seat check failed (DB) show_id=%s", sid)
+        raise
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _db_show_snapshot(*, show_id: int) -> dict | None:
@@ -279,6 +380,45 @@ def _db_show_snapshot(*, show_id: int) -> dict | None:
             return dict(row) if row else None
     except Exception:
         return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _db_remaining_including_holds(*, show_id: int) -> int:
+    """
+    Redis OFF 모드에서 정확한 잔여를 계산하기 위한 DB 기반 remain:
+      remain = total_count - confirmed(ACTIVE) - holds(active)
+    """
+    sid = int(show_id or 0)
+    if sid <= 0:
+        return 0
+    conn = _get_tx_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT total_count FROM concert_shows WHERE show_id=%s LIMIT 1",
+                (sid,),
+            )
+            r0 = cur.fetchone() or {}
+            total = int(r0.get("total_count") or 0)
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM concert_booking_seats "
+                "WHERE show_id=%s AND UPPER(COALESCE(status,''))='ACTIVE'",
+                (sid,),
+            )
+            confirmed = int((cur.fetchone() or {}).get("n") or 0)
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM concert_seat_holds "
+                "WHERE show_id=%s AND (expires_at IS NULL OR expires_at > NOW())",
+                (sid,),
+            )
+            holds = int((cur.fetchone() or {}).get("n") or 0)
+            return max(0, total - confirmed - holds)
+    except Exception:
+        return 0
     finally:
         try:
             conn.close()
@@ -380,10 +520,25 @@ def commit_concert_booking(payload: dict):
         remain_db = int(show_row.get("remain_count") or 0)
     except Exception:
         remain_db = 0
+    # Redis OFF(CACHE_ENABLED=false)에서는 DB remain_count 컬럼이 "홀드 포함 정확값"이 아닐 수 있어,
+    # DB에서 confirmed+holds 기반으로 다시 계산한다.
+    if not CACHE_ENABLED:
+        remain_db = int(_db_remaining_including_holds(show_id=show_id))
     if remain_db < req_count:
         return JSONResponse(status_code=409, content={"ok": False, "code": "SOLD_OUT"})
-    if _db_any_active_seat(show_id=show_id, seats=parsed_seats):
-        return JSONResponse(status_code=409, content={"ok": False, "code": "DUPLICATE_SEAT"})
+    try:
+        if _db_any_active_seat(show_id=show_id, seats=parsed_seats):
+            return JSONResponse(status_code=409, content={"ok": False, "code": "DUPLICATE_SEAT"})
+    except pymysql.err.Error:
+        log.exception("commit_concert_booking: DB error during active seat check show_id=%s", show_id)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "code": "DB_UNAVAILABLE",
+                "message": "일시적으로 예매 검증을 수행할 수 없습니다. 잠시 후 다시 시도해주세요.",
+            },
+        )
 
     # Waiting Room(입장 대기열): permit 없이는 커밋을 받지 않는다(새치기 방지).
     if not wr_verify_permit(permit_token=permit_token, kind="concert", entity_id=show_id, user_id=user_id):
@@ -430,9 +585,20 @@ def commit_concert_booking(payload: dict):
         pass
     else:
         # 1) 홀드(주황) 경로: 좌석 단위 선점으로 remain이 즉시 줄어들게 한다.
-        hold = try_hold_seats(
-            show_id=show_id, seats=parsed_seats, booking_ref=booking_ref
-        )
+        try:
+            hold = try_hold_seats(
+                show_id=show_id, seats=parsed_seats, booking_ref=booking_ref
+            )
+        except pymysql.err.Error:
+            log.exception("commit_concert_booking: DB error during hold/confirmed check show_id=%s", show_id)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "ok": False,
+                    "code": "DB_UNAVAILABLE",
+                    "message": "일시적으로 예매 검증을 수행할 수 없습니다. 잠시 후 다시 시도해주세요.",
+                },
+            )
         if not hold.get("ok"):
             code = hold.get("code") or "DUPLICATE_SEAT"
             # confirmed 좌석은 hold로 덮을 수 없음(회색->주황 금지)
@@ -492,6 +658,15 @@ def reset_waiting_room(show_id: int):
 def reset_concert_redis(show_id: int):
     # 테스트/데모용: 서버가 실제로 쓰는 Redis(cache 논리 DB) 기준으로 콘서트 좌석 상태 키 리셋
     return _reset_concert_redis_seat_state(show_id=int(show_id))
+
+
+@router.post("/api/write/concerts/{show_id}/redis/reconcile")
+def reconcile_concert_redis(show_id: int):
+    """
+    개발/재배포 시 DB 기준으로 Redis 좌석 상태를 재구축.
+    - reset보다 강함(confirmed set + remain까지 DB로부터 재작성)
+    """
+    return _reconcile_concert_redis_state_from_db(show_id=int(show_id))
 
 
 @router.get("/api/write/concerts/waiting-room/status/{queue_ref}")

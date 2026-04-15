@@ -255,16 +255,20 @@
 
           <div class="theaters-detail-body">
             <div class="theaters-detail-summary">
-              <div class="theaters-detail-movie">${escapeHtml(concert.title || '공연')}</div>
-              <div class="theaters-detail-place">${escapeHtml(venueLine || '공연장')}</div>
-              <div class="theaters-detail-date">${escapeHtml(String(show.show_date || '').slice(0, 16))}</div>
+              <div class="theaters-detail-summary-main">
+                <div class="theaters-detail-movie">${escapeHtml(concert.title || '공연')}</div>
+                <div class="theaters-detail-place">${escapeHtml(venueLine || '공연장')}</div>
+                <div class="theaters-detail-date">${escapeHtml(String(show.show_date || '').slice(0, 16))}</div>
+              </div>
+              <div class="theaters-detail-summary-side">
+                <div class="theaters-detail-queue" hidden aria-live="polite"></div>
+              </div>
             </div>
 
             <section class="theaters-detail-panel theaters-detail-panel-seat" data-panel="1">
               <div class="theaters-detail-seat-count">
                 잔여좌석 <strong class="theaters-detail-remain">${escapeHtml(String(remainCount))}</strong><span>/${escapeHtml(String(totalCount))}</span>
               </div>
-              <div class="theaters-detail-queue" hidden aria-live="polite"></div>
               <div class="theaters-detail-screen-label">STAGE</div>
               <div class="theaters-detail-screen-bar"></div>
               <div class="theaters-detail-seat-grid"></div>
@@ -291,7 +295,6 @@
                 <div class="theaters-detail-confirm-row"><span>인원</span><strong class="theaters-detail-confirm-count"></strong></div>
                 <div class="theaters-detail-confirm-row"><span>결제금액</span><strong class="theaters-detail-confirm-price"></strong></div>
               </div>
-              <div class="theaters-detail-queue" hidden aria-live="polite"></div>
               <div class="theaters-detail-confirm-ask-row">
                 <div class="theaters-detail-confirm-ask">결제를 진행하시겠습니까?</div>
                 <button type="button" class="theaters-detail-reselect">좌석 재선택</button>
@@ -732,9 +735,15 @@
         }
 
         // 기존 자리(queueNode)는 보조로만 유지(상단 얇은 라인)
+        // 실제로 "대기열"이 의미 있을 때만 노출해서, 빈 배지가 레이아웃/시선을 방해하지 않게 한다.
         if (queueNode) {
-          queueNode.hidden = false;
-          queueNode.textContent = position > 0 ? `대기열 ${position}번째 (앞에 ${ahead}명)` : '대기열 진입 중…';
+          if (position > 0 || ahead > 0) {
+            queueNode.hidden = false;
+            queueNode.textContent = `대기열 ${position > 0 ? position : 1}번째 (앞에 ${ahead}명)`;
+          } else {
+            queueNode.hidden = true;
+            queueNode.textContent = '';
+          }
         }
         // 약간의 지터를 넣어 동시 폴링 피크를 완화
         const jitter = Math.floor(Math.random() * 180);
@@ -807,8 +816,12 @@
     function renderLargeGrid() {
       // Large venue: avoid 10k~100k DOM nodes.
       // UX: interpark-like seat selection -> legend + row buttons + seat number pages + jump search.
-      const COLS_PER_PAGE = 80;
+      // 한 회차의 seat_cols가 큰 공연(예: 250/500/1000+)에서
+      // "좌석 다음"을 너무 자주 눌러야 하는 UX를 줄이기 위해 페이지 단위를 크게 잡는다.
+      // (UI는 10열 그리드로 촘촘하게 렌더링하므로 한 페이지에 100~200개 정도가 한눈에 들어온다.)
+      const COLS_PER_PAGE = seatCols; // 한 화면에 최대한 보이도록(페이지는 자동 1페이지로 수렴)
       const ROW_BUTTONS_PER_PAGE = 20;
+      const GRID_COLS = 25;
 
       let activeRow = 1;
       let activeColPage = 1;
@@ -847,39 +860,37 @@
       const pageInfo = document.createElement('div');
       pageInfo.className = 'concert-seat-page-info';
 
-      const seatPaging = document.createElement('div');
-      seatPaging.className = 'concert-seat-page';
-
-      const prevBtn = document.createElement('button');
-      prevBtn.type = 'button';
-      prevBtn.className = 'concert-seat-nav-btn';
-      prevBtn.textContent = '좌석 이전';
-
-      const nextBtn = document.createElement('button');
-      nextBtn.type = 'button';
-      nextBtn.className = 'concert-seat-nav-btn';
-      nextBtn.textContent = '좌석 다음';
-
-      const jump = document.createElement('div');
-      jump.className = 'concert-seat-jump';
-      jump.innerHTML = `
-        <span style="font-size:13px;color:#555;">좌석번호 이동</span>
-        <input type="number" min="1" max="${seatCols}" placeholder="번호 입력">
-        <button type="button" class="concert-seat-nav-btn">이동</button>
-      `;
+      // 좌석 이전/다음(컬럼 페이지)은 "한 화면에 최대한" 정책으로 제거한다.
 
       rowPaging.appendChild(rowPrev);
       rowPaging.appendChild(rowNext);
 
-      seatPaging.appendChild(prevBtn);
-      seatPaging.appendChild(nextBtn);
+      const topLine = document.createElement('div');
+      topLine.className = 'concert-seat-topline';
+      topLine.appendChild(pageInfo); // "선택 : 2열 / 좌석 ..." 을 맨 위 중앙
 
-      controls.appendChild(legend);
-      controls.appendChild(rowPaging);
-      controls.appendChild(rowButtonsWrap);
-      controls.appendChild(pageInfo);
-      controls.appendChild(seatPaging);
-      controls.appendChild(jump);
+      const rowLine = document.createElement('div');
+      rowLine.className = 'concert-seat-rowline';
+      rowLine.appendChild(legend);
+      rowLine.appendChild(rowPaging); // 우측에 "열 이전/열 다음"
+
+      const rowMoreHint = document.createElement('div');
+      rowMoreHint.className = 'concert-row-more-hint';
+      rowMoreHint.textContent = '다음';
+
+      const nextRange = document.createElement('div');
+      nextRange.className = 'concert-row-next-range';
+      nextRange.hidden = true;
+
+      const rowsWrap = document.createElement('div');
+      rowsWrap.className = 'concert-seat-rowswrap';
+      rowsWrap.appendChild(rowButtonsWrap);
+      rowsWrap.appendChild(rowMoreHint);
+      rowsWrap.appendChild(nextRange);
+
+      controls.appendChild(topLine);
+      controls.appendChild(rowLine);
+      controls.appendChild(rowsWrap);
 
       const rowWrap = document.createElement('div');
       rowWrap.className = 'theaters-detail-seat-row';
@@ -891,7 +902,7 @@
 
       const rowSeats = document.createElement('div');
       rowSeats.className = 'theaters-detail-seat-row-seats';
-      rowSeats.style.gridTemplateColumns = `repeat(${Math.min(COLS_PER_PAGE, 10)}, minmax(0, 1fr))`;
+      rowSeats.style.gridTemplateColumns = `repeat(${Math.min(COLS_PER_PAGE, GRID_COLS)}, minmax(0, 1fr))`;
       rowWrap.appendChild(rowSeats);
 
       seatGrid.appendChild(controls);
@@ -907,6 +918,8 @@
 
         const startRow = (activeRowPage - 1) * ROW_BUTTONS_PER_PAGE + 1;
         const endRow = Math.min(seatRows, startRow + ROW_BUTTONS_PER_PAGE - 1);
+        const nextStart = endRow + 1;
+        const nextEnd = Math.min(seatRows, endRow + ROW_BUTTONS_PER_PAGE);
 
         rowButtonsWrap.innerHTML = '';
         for (let r = startRow; r <= endRow; r += 1) {
@@ -926,11 +939,14 @@
 
         rowPrev.disabled = activeRowPage <= 1;
         rowNext.disabled = activeRowPage >= totalRowPages;
-      }
-
-      function updateButtonsState(totalSeatPages) {
-        prevBtn.disabled = activeColPage <= 1;
-        nextBtn.disabled = activeColPage >= totalSeatPages;
+        rowMoreHint.hidden = activeRowPage >= totalRowPages;
+        if (nextStart <= seatRows) {
+          nextRange.hidden = false;
+          nextRange.textContent = `${nextStart}~${nextEnd}열`;
+        } else {
+          nextRange.hidden = true;
+          nextRange.textContent = '';
+        }
       }
 
       function renderRowPage() {
@@ -945,7 +961,7 @@
         rowSeats.innerHTML = '';
         // keep grid visually dense
         const visibleCols = endCol - startCol + 1;
-        rowSeats.style.gridTemplateColumns = `repeat(${Math.min(visibleCols, 10)}, minmax(0, 1fr))`;
+        rowSeats.style.gridTemplateColumns = `repeat(${Math.min(visibleCols, GRID_COLS)}, minmax(0, 1fr))`;
 
         for (let col = startCol; col <= endCol; col += 1) {
           const seatKey = createSeatKey(activeRow, col);
@@ -974,8 +990,7 @@
           rowSeats.appendChild(seat);
         }
 
-        pageInfo.textContent = `선택: ${getRowLabel(activeRow)} / 좌석 ${startCol}~${endCol} (페이지 ${activeColPage}/${totalSeatPages})`;
-        updateButtonsState(totalSeatPages);
+        pageInfo.textContent = `현재위치: ${getRowLabel(activeRow)} / 좌석 ${startCol}~${endCol}`;
       }
 
       rowPrev.addEventListener('click', function () {
@@ -988,29 +1003,7 @@
         renderRowButtons();
       });
 
-      prevBtn.addEventListener('click', function () {
-        activeColPage -= 1;
-        renderRowPage();
-      });
-
-      nextBtn.addEventListener('click', function () {
-        activeColPage += 1;
-        renderRowPage();
-      });
-
-      const jumpInput = jump.querySelector('input');
-      const jumpBtn = jump.querySelector('button');
-      if (jumpBtn) {
-        jumpBtn.addEventListener('click', function () {
-          const targetCol = toInt(jumpInput && jumpInput.value);
-          if (targetCol <= 0 || targetCol > seatCols) {
-            alert('좌석 번호가 올바르지 않습니다.');
-            return;
-          }
-          activeColPage = Math.ceil(targetCol / COLS_PER_PAGE);
-          renderRowPage();
-        });
-      }
+      // 좌석번호 이동은 "한 화면에 최대한" 정책으로 제거 (UI 단순화)
 
       renderRowButtons();
       renderRowPage();
@@ -1144,11 +1137,12 @@
                 const position = q && Number.isFinite(Number(q.position)) ? Number(q.position) : 0;
                 const ahead = q && Number.isFinite(Number(q.ahead)) ? Number(q.ahead) : Math.max(0, position - 1);
                 if (queueNode) {
-                  queueNode.hidden = false;
-                  if (position > 0) {
-                    queueNode.textContent = `대기열 ${position}번째 (앞에 ${ahead}명)`;
+                  if (position > 0 || ahead > 0) {
+                    queueNode.hidden = false;
+                    queueNode.textContent = `대기열 ${position > 0 ? position : 1}번째 (앞에 ${ahead}명)`;
                   } else {
-                    queueNode.textContent = '대기열 진입 중…';
+                    queueNode.hidden = true;
+                    queueNode.textContent = '';
                   }
                 }
                 if (position > 0) {

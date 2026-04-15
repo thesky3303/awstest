@@ -267,6 +267,49 @@ def _db_connect(db_name: str):
     )
 
 
+def _ensure_loadtest_users_for_concert3(
+    db_name: str, *, user_base: int, user_count: int, name_prefix: str = "sqs-load-concert3-"
+) -> None:
+    """
+    concert_booking.user_id → users FK 때문에, 워커가 큐를 처리하려면 행이 있어야 한다.
+    concert1/2 스크립트는 여기서 시드했으나 v3에 빠져 있어 신규 DB에서 전부 FK 실패(기존 워커는 DUPLICATE_SEAT로 오표기)가 났다.
+    """
+    n = int(user_count)
+    if n <= 0:
+        return
+    ub = int(user_base)
+    uid_hi = ub + n - 1
+    conn = _db_connect(db_name)
+    try:
+        with conn.cursor() as cur:
+            for uid in range(ub, uid_hi + 1):
+                cur.execute("SELECT 1 FROM users WHERE user_id = %s LIMIT 1", (uid,))
+                if cur.fetchone():
+                    continue
+                name = f"{name_prefix}{uid}"
+                ok = False
+                for pfx in (1555, 1556, 1557):
+                    phone = f"+{pfx}{uid:010d}"[:20]
+                    cur.execute(
+                        "INSERT IGNORE INTO users (user_id, phone, password_hash, name) VALUES (%s, %s, %s, %s)",
+                        (uid, phone, "loadtest", name),
+                    )
+                    cur.execute("SELECT 1 FROM users WHERE user_id = %s LIMIT 1", (uid,))
+                    if cur.fetchone():
+                        ok = True
+                        break
+                if not ok:
+                    raise SystemExit(
+                        f"users 시드 실패: user_id={uid} (RDS users 테이블·AUTO_INCREMENT·권한 확인)"
+                    )
+        print(
+            f"[info] loadtest users ensured user_id={ub}..{uid_hi} (n={n})",
+            file=sys.stderr,
+        )
+    finally:
+        conn.close()
+
+
 def _booked_seat_pairs(cur, show_id: int) -> Set[Tuple[int, int]]:
     cur.execute(
         """
@@ -525,6 +568,12 @@ def main():
                 f"→ allow_qref_reuse=false 이므로 enter_target={enter_target}로 올려 고유 queue_ref를 확보합니다.",
                 file=sys.stderr,
             )
+
+    _ensure_loadtest_users_for_concert3(
+        dbn,
+        user_base=int(args.user_base),
+        user_count=int(enter_target),
+    )
 
     t0 = time.monotonic()
 

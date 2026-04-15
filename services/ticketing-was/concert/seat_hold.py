@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Dict, List, Tuple
 
@@ -10,12 +11,15 @@ from config import (
     CONCERT_CONFIRMED_SET_TTL_SEC,
     CONCERT_SEAT_HOLD_TTL_SEC,
     CONCERT_SEAT_HOLD_SOLDOUT_TTL_SEC,
+    CACHE_ENABLED,
     DB_HOST,
     DB_NAME,
     DB_PASSWORD,
     DB_PORT,
     DB_USER,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _seat_key(show_id: int, row: int, col: int) -> str:
@@ -288,6 +292,8 @@ def any_confirmed(*, show_id: int, seats: List[Tuple[int, int]]) -> bool:
         # Redis hold가 DB 확정을 모르고 중복 홀드를 허용할 수 있다.
         # 이 경우 worker에서 IntegrityError(DUPLICATE_SEAT)가 대량으로 발생하므로,
         # write(hold) 단계에서 DB를 확인해 조기에 차단한다.
+        # DB 조회 실패 시 False(fail-open)는 홀드·QUEUED 후 워커 중복만 드러나므로 예외를 전파한다.
+        conn = None
         try:
             conn = pymysql.connect(
                 host=DB_HOST,
@@ -315,13 +321,15 @@ def any_confirmed(*, show_id: int, seats: List[Tuple[int, int]]) -> bool:
                 )
                 row = cur.fetchone()
                 return bool(row)
-        except Exception:
-            return False
+        except pymysql.err.Error:
+            log.exception("any_confirmed: DB fallback check failed show_id=%s", show_id)
+            raise
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     return False
 
 
@@ -352,6 +360,73 @@ def try_hold_seats(
     # 회색(확정) 좌석은 절대 주황(홀드)로 덮어씌우지 않는다.
     if any_confirmed(show_id=show_id, seats=seats):
         return {"ok": False, "code": "CONFIRMED_SEAT"}
+
+    # Redis를 완전히 끈 모드(CACHE_ENABLED=false)에서는 DB에 홀드를 기록해
+    # 주황/잔여 계산이 Redis 없이도 가능하도록 한다.
+    if not CACHE_ENABLED:
+        conn = None
+        try:
+            conn = pymysql.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+                charset="utf8mb4",
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=False,
+            )
+            with conn.cursor() as cur:
+                # expired hold 정리(best-effort) 후 삽입
+                try:
+                    cur.execute(
+                        "DELETE FROM concert_seat_holds WHERE show_id=%s AND expires_at IS NOT NULL AND expires_at <= NOW()",
+                        (int(show_id),),
+                    )
+                except Exception:
+                    pass
+
+                # expires_at은 행별로 동일 TTL을 쓰되, SQL placeholder 수가 params와 맞아야 한다.
+                expires_sql = "NULL" if ttl <= 0 else "DATE_ADD(NOW(), INTERVAL %s SECOND)"
+                params: list = []
+                values_sql = []
+                for (r, c) in seats:
+                    if ttl > 0:
+                        # 5 params: booking_ref, show_id, row, col, ttl
+                        values_sql.append("(%s,%s,%s,%s," + expires_sql + ")")
+                        params.extend([str(booking_ref), int(show_id), int(r), int(c), int(ttl)])
+                    else:
+                        # 4 params: booking_ref, show_id, row, col (expires_at is literal NULL)
+                        values_sql.append("(%s,%s,%s,%s," + expires_sql + ")")
+                        params.extend([str(booking_ref), int(show_id), int(r), int(c)])
+                cur.execute(
+                    "INSERT INTO concert_seat_holds (booking_ref, show_id, seat_row_no, seat_col_no, expires_at) VALUES "
+                    + ",".join(values_sql),
+                    tuple(params),
+                )
+            conn.commit()
+            return {"ok": True, "code": "HELD", "ttl_sec": ttl}
+        except pymysql.err.IntegrityError:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            return {"ok": False, "code": "DUPLICATE_SEAT"}
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            log.exception("DB hold failed show_id=%s booking_ref=%s", show_id, booking_ref)
+            return {"ok": False, "code": "ERROR"}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     held: List[Tuple[int, int]] = []
     pipe = redis_client.pipeline()
@@ -399,6 +474,42 @@ def try_hold_seats(
 def release_seats(*, show_id: int, seats: List[Tuple[int, int]], booking_ref: str) -> None:
     if not seats:
         return
+
+    # Redis OFF 모드: DB 홀드 해제
+    if not CACHE_ENABLED:
+        conn = None
+        try:
+            conn = pymysql.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+                charset="utf8mb4",
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+            )
+            with conn.cursor() as cur:
+                clauses = []
+                params: list = [int(show_id), str(booking_ref)]
+                for r, c in seats:
+                    clauses.append("(seat_row_no=%s AND seat_col_no=%s)")
+                    params.extend([int(r), int(c)])
+                where_seats = " OR ".join(clauses) if clauses else "1=0"
+                cur.execute(
+                    "DELETE FROM concert_seat_holds WHERE show_id=%s AND booking_ref=%s AND (" + where_seats + ")",
+                    tuple(params),
+                )
+        except Exception:
+            log.exception("DB release_seats failed show_id=%s booking_ref=%s", show_id, booking_ref)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return
+
     pipe = redis_client.pipeline()
     for r, c in seats:
         pipe.get(_seat_key(show_id, r, c))
@@ -420,6 +531,37 @@ def release_seats(*, show_id: int, seats: List[Tuple[int, int]], booking_ref: st
 
 
 def hold_seats_snapshot(show_id: int) -> List[str]:
+    if not CACHE_ENABLED:
+        conn = None
+        try:
+            conn = pymysql.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+                charset="utf8mb4",
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT seat_row_no, seat_col_no FROM concert_seat_holds "
+                    "WHERE show_id=%s AND (expires_at IS NULL OR expires_at > NOW()) "
+                    "ORDER BY seat_row_no ASC, seat_col_no ASC",
+                    (int(show_id),),
+                )
+                rows = cur.fetchall() or []
+            return [f"{int(r['seat_row_no'])}-{int(r['seat_col_no'])}" for r in rows]
+        except Exception:
+            log.exception("DB hold_seats_snapshot failed show_id=%s", show_id)
+            return []
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     try:
         return list(redis_client.smembers(_hold_set_key(show_id)) or [])
     except Exception:
@@ -427,6 +569,36 @@ def hold_seats_snapshot(show_id: int) -> List[str]:
 
 
 def hold_count(show_id: int) -> int:
+    if not CACHE_ENABLED:
+        conn = None
+        try:
+            conn = pymysql.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+                charset="utf8mb4",
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True,
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM concert_seat_holds "
+                    "WHERE show_id=%s AND (expires_at IS NULL OR expires_at > NOW())",
+                    (int(show_id),),
+                )
+                row = cur.fetchone() or {}
+                return int(row.get("n") or 0)
+        except Exception:
+            log.exception("DB hold_count failed show_id=%s", show_id)
+            return 0
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     try:
         return int(redis_client.scard(_hold_set_key(show_id)) or 0)
     except Exception:

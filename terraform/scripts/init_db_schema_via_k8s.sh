@@ -11,6 +11,11 @@ set -euo pipefail
 : "${EKS_CLUSTER_NAME:?EKS_CLUSTER_NAME required (set by Terraform null_resource.db_schema_init)}"
 : "${AWS_REGION:?AWS_REGION required}"
 
+FORCE_DB_SCHEMA_INIT="${FORCE_DB_SCHEMA_INIT:-0}"
+FORCE_DB_DDL="${FORCE_DB_DDL:-0}"
+FORCE_DB_SEED="${FORCE_DB_SEED:-0}"
+SKIP_DB_SCHEMA_IF_EXISTS="${SKIP_DB_SCHEMA_IF_EXISTS:-1}"
+
 if ! command -v aws >/dev/null 2>&1; then
   echo "ERROR: aws CLI not found. Install AWS CLI and retry." >&2
   exit 127
@@ -62,17 +67,94 @@ kubectl -n "$K8S_NAMESPACE" run "$POD_NAME" \
 
 kubectl -n "$K8S_NAMESPACE" wait --for=condition=Ready pod/"$POD_NAME" --timeout=180s
 
+echo "Checking DB init state (schema vs seed)..."
+
+_mysql_scalar() {
+  # Usage: _mysql_scalar "<db_or_empty>" "<sql>"
+  local db="${1:-}"
+  local sql="${2:-}"
+  if [ -z "$sql" ]; then
+    echo ""
+    return 0
+  fi
+  local db_flag=""
+  if [ -n "$db" ]; then
+    db_flag="-D \"$db\""
+  fi
+  # NOTE: avoid nested quote pitfalls by embedding SQL directly inside one double-quoted sh -lc string.
+  # Probe queries must never fail the whole script (fresh DB, auth, transient DNS, etc).
+  # Returning empty is fine; the caller treats that as "not present" and proceeds to init.
+  kubectl -n "$K8S_NAMESPACE" exec "$POD_NAME" -- sh -lc \
+    "MYSQL_PWD=\"$DB_PASSWORD\" mysql -N -s -h \"$DB_HOST\" -u \"$DB_USER\" --protocol=tcp --default-character-set=utf8mb4 ${db_flag} -e \"$sql\" 2>/dev/null" 2>/dev/null || true \
+    | tr -d '\r' | tail -n 1
+}
+
+# Schema check: a couple of core tables from create.sql
+HAS_MOVIES_TABLE="$(_mysql_scalar '' "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='movies' LIMIT 1;")"
+HAS_CONCERTS_TABLE="$(_mysql_scalar '' "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='concerts' LIMIT 1;")"
+
+# Seed check: 대표 시드 2개(영화 1 + 콘서트 5만석 타이틀). 둘 중 하나만 있어도 Insert.sql 일부라도 적용된 상태로 간주.
+HAS_MOVIE_1="$(_mysql_scalar "$DB_NAME" "SELECT 1 FROM movies WHERE movie_id = 1 LIMIT 1;")"
+HAS_BIG_CONCERT="$(_mysql_scalar "$DB_NAME" "SELECT 1 FROM concerts WHERE title='2026 봄 페스티벌 LIVE - 5만석' LIMIT 1;")"
+
+SCHEMA_OK=0
+SEED_OK=0
+if [ "$HAS_MOVIES_TABLE" = "1" ] && [ "$HAS_CONCERTS_TABLE" = "1" ]; then
+  SCHEMA_OK=1
+fi
+if [ "$HAS_MOVIE_1" = "1" ] || [ "$HAS_BIG_CONCERT" = "1" ]; then
+  SEED_OK=1
+fi
+
+echo "Schema present: $SCHEMA_OK (movies=$HAS_MOVIES_TABLE concerts=$HAS_CONCERTS_TABLE)"
+echo "Seed present:   $SEED_OK (movie#1=$HAS_MOVIE_1 big_concert=$HAS_BIG_CONCERT)"
+
+# Force overrides
+if [ "$FORCE_DB_SCHEMA_INIT" = "1" ]; then
+  FORCE_DB_DDL=1
+  FORCE_DB_SEED=1
+fi
+
+NEED_DDL=0
+NEED_SEED=0
+
+if [ "$FORCE_DB_DDL" = "1" ]; then
+  NEED_DDL=1
+elif [ "$SCHEMA_OK" != "1" ]; then
+  NEED_DDL=1
+fi
+
+if [ "$FORCE_DB_SEED" = "1" ]; then
+  NEED_SEED=1
+elif [ "$SEED_OK" != "1" ]; then
+  NEED_SEED=1
+fi
+
+if [ "$SKIP_DB_SCHEMA_IF_EXISTS" = "1" ] && [ "$NEED_DDL" = "0" ] && [ "$NEED_SEED" = "0" ]; then
+  echo "DB already has schema + seed. Skipping initialization."
+  echo "Tip: set FORCE_DB_SCHEMA_INIT=1 (or FORCE_DB_DDL=1 / FORCE_DB_SEED=1) to re-apply."
+  exit 0
+fi
+
 echo "Copying SQL files into pod..."
 kubectl -n "$K8S_NAMESPACE" cp "$CREATE_SQL" "$POD_NAME":/tmp/create.sql >/dev/null
 kubectl -n "$K8S_NAMESPACE" cp "$INSERT_SQL" "$POD_NAME":/tmp/Insert.sql >/dev/null
 
-echo "Applying DDL (create.sql)..."
-kubectl -n "$K8S_NAMESPACE" exec "$POD_NAME" -- sh -lc \
-  "MYSQL_PWD=\"$DB_PASSWORD\" mysql -h \"$DB_HOST\" -u \"$DB_USER\" --protocol=tcp --default-character-set=utf8mb4 < /tmp/create.sql"
+if [ "$NEED_DDL" = "1" ]; then
+  echo "Applying DDL (create.sql)..."
+  kubectl -n "$K8S_NAMESPACE" exec "$POD_NAME" -- sh -lc \
+    "MYSQL_PWD=\"$DB_PASSWORD\" mysql -h \"$DB_HOST\" -u \"$DB_USER\" --protocol=tcp --default-character-set=utf8mb4 < /tmp/create.sql"
+else
+  echo "Skipping DDL (schema already present)."
+fi
 
-echo "Applying seed (Insert.sql)..."
-kubectl -n "$K8S_NAMESPACE" exec "$POD_NAME" -- sh -lc \
-  "MYSQL_PWD=\"$DB_PASSWORD\" mysql -h \"$DB_HOST\" -u \"$DB_USER\" --protocol=tcp --default-character-set=utf8mb4 < /tmp/Insert.sql"
+if [ "$NEED_SEED" = "1" ]; then
+  echo "Applying seed (Insert.sql)..."
+  kubectl -n "$K8S_NAMESPACE" exec "$POD_NAME" -- sh -lc \
+    "MYSQL_PWD=\"$DB_PASSWORD\" mysql -h \"$DB_HOST\" -u \"$DB_USER\" --protocol=tcp --default-character-set=utf8mb4 < /tmp/Insert.sql"
+else
+  echo "Skipping seed (baseline data already present)."
+fi
 
 echo "Verifying basic objects..."
 kubectl -n "$K8S_NAMESPACE" exec "$POD_NAME" -- sh -lc \

@@ -1,3 +1,9 @@
+<!--
+CURSOR_ONLY_INSTRUCTION (workspace scope):
+- Do not modify this workspace's `README.md`.
+- Only edit it if the user explicitly asks you to update the README.
+-->
+
 # Ticketing (S3 프론트 + EKS API/worker, RDS·Redis·SQS, Terraform)
 
 S3 정적 호스팅, EKS Ingress, RDS(MySQL), ElastiCache, SQS를 Terraform으로 묶은 프로젝트입니다.

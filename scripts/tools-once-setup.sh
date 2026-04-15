@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 _sync_scripts() {
+  # Windows/HGFS/IDE 환경에서 CRLF가 섞이면 Pod에서 shebang 실행이 깨질 수 있어,
+  # 복사 전에 로컬 레포의 줄바꿈을 멱등하게 정규화한다.
+  bash "$REPO_ROOT/scripts/normalize-line-endings.sh" >/dev/null || true
   kubectl -n "$NS" exec "$POD" -- mkdir -p /work/ticketing-db/scripts /work/ticketing-db/terraform
   kubectl cp "$REPO_ROOT/scripts/." "$NS/$POD:/work/ticketing-db/scripts/"
   echo "Synced $REPO_ROOT/scripts/. -> $NS/$POD:/work/ticketing-db/scripts/"
@@ -16,8 +19,13 @@ _sync_scripts() {
 _ensure_python_deps() {
   # Running 중인 기존 tools-once Pod를 재사용하는 경우에도,
   # python 패키지 설치가 누락될 수 있어 매번(멱등) 보장한다.
-  kubectl -n "$NS" exec "$POD" -- python -m pip install -q --upgrade "pip>=26,<27"
-  kubectl -n "$NS" exec "$POD" -- python -m pip install -q boto3 pymysql redis
+  # 컨테이너가 root로 돌아가므로 pip의 root 경고를 끈다(의도된 일회성 ops Pod).
+  _pip_install() {
+    kubectl -n "$NS" exec "$POD" -- python -m pip install -q --root-user-action=ignore "$@"
+  }
+  _pip_install --upgrade "pip>=26,<27"
+  _pip_install boto3 pymysql redis
+  _pip_install "locust==2.34.0"
 }
 
 _need_fresh_pod() {
