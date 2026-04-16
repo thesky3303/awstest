@@ -10,22 +10,26 @@ metadata:
 spec:
   scaleTargetRef:
     name: worker-svc
-  pollingInterval: 5
-  cooldownPeriod: 300
-  minReplicaCount: 2
-  maxReplicaCount: 4
+  # 더 민감한 반응(큐 적체 시 빠른 scale-out, 적체 해소 후 빠른 scale-in)
+  pollingInterval: 2
+  cooldownPeriod: 60
+  # 기본은 서버 기동 시 1대 고정(Deployment replicas=1). autoscale ON 시 1~maxReplicaCount로 확장.
+  minReplicaCount: 1
+  maxReplicaCount: 8
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleDown:
-          stabilizationWindowSeconds: 180
+          stabilizationWindowSeconds: 60
   triggers:
     - type: aws-sqs-queue
       authenticationRef:
         name: keda-worker-sqs-aws
       metadata:
         awsRegion: ap-northeast-2
+        # scale target(worker-svc)의 env로부터 큐 URL을 읽음(환경별/계정별 URL 차이를 안전하게 흡수)
         queueURLFromEnv: SQS_QUEUE_URL
-        queueLength: "2"
-        activationQueueLength: "1"
+        # 1메시지부터 즉시 확장(데모/버스트에서 반응성 극대화)
+        queueLength: "1"
+        activationQueueLength: "0"
         scaleOnInFlight: "true"

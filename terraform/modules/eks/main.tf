@@ -279,6 +279,7 @@ resource "aws_iam_role_policy" "sqs_access" {
         "sqs:SendMessage",
         "sqs:ReceiveMessage",
         "sqs:DeleteMessage",
+        "sqs:GetQueueUrl",
         "sqs:GetQueueAttributes",
       ]
       Resource = var.sqs_queue_arns

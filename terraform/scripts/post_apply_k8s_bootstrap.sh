@@ -18,7 +18,6 @@ fi
 NS="${TICKETING_NAMESPACE:-ticketing}"
 CM="${TICKETING_CONFIGMAP_NAME:-ticketing-config}"
 WORKER="${WORKER_DEPLOYMENT_NAME:-worker-svc}"
-WORKER_UI="${WORKER_UI_DEPLOYMENT_NAME:-worker-svc-ui}"
 READ_API="${READ_API_DEPLOYMENT_NAME:-read-api}"
 WRITE_API="${WRITE_API_DEPLOYMENT_NAME:-write-api}"
 INGRESS_NAME="${K8S_INGRESS_NAME:-ticketing-ingress}"
@@ -76,7 +75,6 @@ kubectl apply -k "$tmp_k8s/k8s" -n "$NS"
 kubectl -n "$NS" set image deploy/"$READ_API" "read-api=${WAS_IMAGE}" >/dev/null
 kubectl -n "$NS" set image deploy/"$WRITE_API" "write-api=${WAS_IMAGE}" >/dev/null
 kubectl -n "$NS" set image deploy/"$WORKER" "worker-svc=${WORKER_IMAGE}" >/dev/null
-kubectl -n "$NS" set image deploy/"$WORKER_UI" "worker-svc=${WORKER_IMAGE}" >/dev/null 2>&1 || true
 
 kubectl -n "$NS" annotate sa sqs-access-sa "eks.amazonaws.com/role-arn=${SQS_ROLE_ARN}" --overwrite >/dev/null 2>&1 || true
 
@@ -104,7 +102,6 @@ echo "=== patch configmap + rollouts ==="
 kubectl -n "$NS" patch cm "$CM" --type merge -p "{\"data\":{\"DB_NAME\":\"${DB_SCHEMA_NAME}\"}}" || true
 kubectl -n "$NS" patch cm "$CM" --type merge -p "{\"data\":{\"AWS_REGION\":\"$AWS_REGION\"}}" || true
 kubectl -n "$NS" rollout restart deploy/"$WORKER" || true
-kubectl -n "$NS" rollout restart deploy/"$WORKER_UI" || true
 kubectl -n "$NS" rollout restart deploy/"$READ_API" || true
 kubectl -n "$NS" rollout restart deploy/"$WRITE_API" || true
 

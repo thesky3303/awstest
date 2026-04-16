@@ -1,6 +1,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+namespace: ticketing
+
 resources:
   - priorityclass-ticketing.yaml
   - configmap.yaml
@@ -12,12 +14,12 @@ resources:
   - write-api/service.yaml
   - worker-svc/deployment.yaml
   - worker-svc/service.yaml
-  - worker-svc-ui/deployment.yaml
-  - worker-svc-ui/service.yaml
   - ingress.yaml
 
 images:
   - name: ticketing/ticketing-was
+    newName: 538118265080.dkr.ecr.ap-northeast-2.amazonaws.com/ticketing/ticketing-was
     newTag: latest
   - name: ticketing/worker-svc
+    newName: 538118265080.dkr.ecr.ap-northeast-2.amazonaws.com/ticketing/worker-svc
     newTag: latest

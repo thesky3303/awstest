@@ -62,6 +62,22 @@ CACHE_WARMUP_INTERVAL_SEC = _get_int_env("CACHE_WARMUP_INTERVAL_SEC", 60, minimu
 # true: 주기 웜업 시 영화/극장 전체 리빌드 생략, 콘서트 목록만 갱신(대규모 오픈 시 부하 완화).
 CACHE_WARMUP_REPEAT_LIGHT = _get_bool_env("CACHE_WARMUP_REPEAT_LIGHT", False)
 
+# ── Startup DB sync (write-api) ───────────────────────────────────────────────
+# 목적: write-api 기동 시(최초/rollout restart) DB remain_count를 ACTIVE 예약좌석 기준으로 동기화.
+# NOTE: 네트워크/DB 지연으로 기동 시간이 길어질 수 있으니 k8s startupProbe를 함께 조정할 것.
+SYNC_REMAIN_COUNTS_ON_STARTUP = _get_bool_env("SYNC_REMAIN_COUNTS_ON_STARTUP", False)
+SYNC_DB_WAIT_MAX_SEC = _get_int_env("SYNC_DB_WAIT_MAX_SEC", 120, minimum=0)
+SYNC_DB_WAIT_INITIAL_BACKOFF_MS = _get_int_env("SYNC_DB_WAIT_INITIAL_BACKOFF_MS", 500, minimum=0)
+SYNC_DB_WAIT_MAX_BACKOFF_MS = _get_int_env("SYNC_DB_WAIT_MAX_BACKOFF_MS", 5000, minimum=0)
+
+# ── Read warmup ordering (read-api) ───────────────────────────────────────────
+# 목적: read-api 웜업이 "과거 remain_count"를 잡지 않도록, write-api startup sync 완료를 먼저 기다린다.
+READ_WAIT_FOR_WRITE_SYNC_ON_STARTUP = _get_bool_env("READ_WAIT_FOR_WRITE_SYNC_ON_STARTUP", True)
+READ_WAIT_FOR_WRITE_SYNC_MAX_SEC = _get_int_env("READ_WAIT_FOR_WRITE_SYNC_MAX_SEC", 180, minimum=0)
+READ_WAIT_FOR_WRITE_SYNC_INITIAL_BACKOFF_MS = _get_int_env("READ_WAIT_FOR_WRITE_SYNC_INITIAL_BACKOFF_MS", 300, minimum=0)
+READ_WAIT_FOR_WRITE_SYNC_MAX_BACKOFF_MS = _get_int_env("READ_WAIT_FOR_WRITE_SYNC_MAX_BACKOFF_MS", 3000, minimum=0)
+WRITE_API_BASE_URL = os.getenv("WRITE_API_BASE_URL", "http://write-api:5001").strip()
+
 # 논리 DB 분리: 노드 1대·요금 동일 → 조회 캐시 FLUSHDB 가 SQS 예매 키(booking:*)를 건드리지 않음.
 # (클러스터 모드 Redis에서는 미지원 — 현재 Terraform은 단일 노드 replication group)
 def _elasticache_db_index(name: str, default: int) -> int:
@@ -113,7 +129,7 @@ COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID", "").strip()
 
 # ── SQS ──────────────────────────────────────────────────────────────────────
 AWS_REGION    = os.getenv("AWS_REGION", "")
-SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
+SQS_QUEUE_NAME = os.getenv("SQS_QUEUE_NAME", "ticketing-reservation.fifo").strip()
 # 스위치: false면 SQS 호출 자체를 차단한다.
 # NOTE: 현재 write-api는 SQS 동기 폴백(DB 직접 커밋)이 제거된 상태라,
 # SQS_ENABLED=false에서 예매 커밋을 "DB로 즉시" 돌리려면 동기 커밋 경로를 복원해야 한다.
@@ -134,7 +150,7 @@ BOOKING_QUEUE_COUNTER_TTL_SEC = _get_int_env("BOOKING_QUEUE_COUNTER_TTL_SEC", BO
 
 # SQS 예매를 켠 경우 예매 상태(booking:*) ElastiCache는 필수 — worker·write-api 불일치 방지로 자동 True.
 BOOKING_STATE_ENABLED = _get_bool_env("BOOKING_STATE_ENABLED", True)
-if SQS_ENABLED and str(SQS_QUEUE_URL or "").strip():
+if SQS_ENABLED and str(SQS_QUEUE_NAME or "").strip():
     BOOKING_STATE_ENABLED = True
 
 # ── Waiting Room (입장 대기열) ────────────────────────────────────────────────

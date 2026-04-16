@@ -27,7 +27,6 @@ spec:
                       operator: In
                       values:
                         - worker-svc
-                        - worker-svc-ui
                 topologyKey: kubernetes.io/hostname
       topologySpreadConstraints:
         - maxSkew: 1
@@ -71,7 +70,7 @@ spec:
               path: /api/read/health
               port: 5000
             periodSeconds: 10
-            failureThreshold: 36
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /api/read/health

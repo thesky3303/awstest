@@ -29,6 +29,21 @@ data:
   BOOKING_STATE_ENABLED: "true"
   # 콘서트: minimal=기동 시 공연 목록만 Redis / full=공연별 상세 키까지 일괄 웜업
   CONCERT_CACHE_WARMUP_MODE: "minimal"
+
+  # write-api: 기동 시 remain_count 동기화(DB UPDATE) 실행 여부.
+  # - 최초 기동/rollout restart 때 1회 실행된다(요청마다 실행 아님).
+  # - DB가 늦게 뜨는 환경에서 재시도/대기 후 진행.
+  SYNC_REMAIN_COUNTS_ON_STARTUP: "true"
+  SYNC_DB_WAIT_MAX_SEC: "120"
+  SYNC_DB_WAIT_INITIAL_BACKOFF_MS: "500"
+  SYNC_DB_WAIT_MAX_BACKOFF_MS: "5000"
+
+  # read-api: 기동 웜업 전에 write-api startup sync 완료를 기다려 순서를 보장.
+  READ_WAIT_FOR_WRITE_SYNC_ON_STARTUP: "true"
+  READ_WAIT_FOR_WRITE_SYNC_MAX_SEC: "180"
+  READ_WAIT_FOR_WRITE_SYNC_INITIAL_BACKOFF_MS: "300"
+  READ_WAIT_FOR_WRITE_SYNC_MAX_BACKOFF_MS: "3000"
+  WRITE_API_BASE_URL: "http://write-api:5001"
   # 콘서트 SQS FIFO: 한 회차 내부 샤딩 수(그룹 분산). 파드 확장 효과를 만들기 위한 핵심 파라미터.
   CONCERT_FIFO_SHARDS: "64"
   # 부트스트랩 시 회차 행 목록 캐시 TTL(초). 0이면 매 요청 DB 조회.
@@ -41,6 +56,8 @@ data:
   SQS_BOTO_RETRY_MODE: "adaptive"
   SQS_CONNECT_TIMEOUT_SEC: "5"
   SQS_READ_TIMEOUT_SEC: "30"
+  # 단일 큐 모드: URL을 주입하지 않고 이름만 공유(앱이 GetQueueUrl로 조회)
+  SQS_QUEUE_NAME: "ticketing-reservation.fifo"
   # worker-svc 수신 (FIFO는 한 번에 서로 다른 그룹 최대 10개까지)
   SQS_RECEIVE_MAX_MESSAGES: "10"
   # 배치로 받은 메시지를 동시에 처리(그룹당 최대 1개/Receive이므로 순서 안전). GUI 대기 단축.
@@ -80,5 +97,5 @@ data:
 #   --from-literal=DB_PASSWORD=<YOUR_DB_PASSWORD> \
 #   --from-literal=ELASTICACHE_PRIMARY_ENDPOINT=<elasticache-endpoint> \
 #   --from-literal=REDIS_HOST=<elasticache-endpoint> \
-#   --from-literal=SQS_QUEUE_URL=<sqs-fifo-url> \
+#   --from-literal=SQS_QUEUE_NAME=ticketing-reservation.fifo \
 #   -n ticketing

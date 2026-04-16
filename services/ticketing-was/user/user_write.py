@@ -99,6 +99,8 @@ def _refund_concert_booking(user_id: int, booking_id: int):
     """콘서트 예매 환불: concert_booking→CANCEL, concert_payment→N, 좌석 반환."""
     concert_id_for_cache = 0
     show_id_for_cache = 0
+    refunded_seat_keys: list[str] = []
+    remain_after_db: int | None = None
     conn = _get_tx_connection()
     try:
         with conn.cursor() as cur:
@@ -134,6 +136,20 @@ def _refund_concert_booking(user_id: int, booking_id: int):
                 crow = cur.fetchone()
                 if crow:
                     concert_id_for_cache = _to_int(crow.get("concert_id"))
+
+            # 환불로 취소되는 ACTIVE 좌석을 미리 수집(confirmed set/remain 카운터 복구용)
+            if show_id > 0:
+                cur.execute(
+                    "SELECT seat_row_no, seat_col_no FROM concert_booking_seats "
+                    "WHERE booking_id=%s AND UPPER(COALESCE(status,''))='ACTIVE' FOR UPDATE",
+                    (booking_id,),
+                )
+                rows = cur.fetchall() or []
+                refunded_seat_keys = [
+                    f"{_to_int(r.get('seat_row_no'))}-{_to_int(r.get('seat_col_no'))}"
+                    for r in rows
+                    if _to_int(r.get("seat_row_no")) > 0 and _to_int(r.get("seat_col_no")) > 0
+                ]
 
             cur.execute(
                 "UPDATE concert_booking SET book_status = 'CANCEL' WHERE booking_id = %s",
@@ -171,6 +187,7 @@ def _refund_concert_booking(user_id: int, booking_id: int):
                 cur.execute("SELECT remain_count FROM concert_shows WHERE show_id = %s", (int(show_id),))
                 row = cur.fetchone() or {}
                 remain_after = _to_int(row.get("remain_count"))
+                remain_after_db = int(remain_after)
                 if remain_after <= 0:
                     cur.execute("UPDATE concert_shows SET status = 'CLOSED' WHERE show_id = %s", (int(show_id),))
                 else:
@@ -188,12 +205,23 @@ def _refund_concert_booking(user_id: int, booking_id: int):
 
     try:
         from concert.concert_read_cache import invalidate_concert_caches_after_booking
+        from cache.redis_client import redis_client
+        from concert.seat_hold import remove_confirmed_seats
 
         if concert_id_for_cache > 0:
             invalidate_concert_caches_after_booking(
                 concert_id_for_cache,
                 show_id=show_id_for_cache if show_id_for_cache > 0 else None,
             )
+
+        # Redis 정합성 보정(best-effort):
+        # - confirmed set에서 환불 좌석 제거(중복좌석 방지)
+        # - remain 단일 카운터를 DB 값으로 동기화(잔여 복구)
+        if show_id_for_cache > 0:
+            if refunded_seat_keys:
+                remove_confirmed_seats(show_id=int(show_id_for_cache), seat_keys=refunded_seat_keys)
+            if remain_after_db is not None:
+                redis_client.set(f"concert:show:{int(show_id_for_cache)}:remain:v1", int(remain_after_db))
     except Exception:
         pass
 

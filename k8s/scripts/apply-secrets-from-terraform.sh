@@ -49,20 +49,12 @@ else
   fi
 fi
 
-if [ -n "${POST_APPLY_SQS_QUEUE_URL:-}" ]; then
-  SQS_URL="$POST_APPLY_SQS_QUEUE_URL"
-else
-  SQS_URL="$(terraform -chdir="$TF_DIR" output -raw sqs_queue_url)"
-fi
+SQS_QUEUE_NAME="${SQS_QUEUE_NAME:-ticketing-reservation.fifo}"
 
-if [ -n "${POST_APPLY_SQS_INTERACTIVE_QUEUE_URL:-}" ]; then
-  SQS_INTERACTIVE_URL="$POST_APPLY_SQS_INTERACTIVE_QUEUE_URL"
+if [ -n "${POST_APPLY_SQS_QUEUE_URL:-}" ]; then
+  SQS_QUEUE_URL="$POST_APPLY_SQS_QUEUE_URL"
 else
-  SQS_INTERACTIVE_URL="$(terraform -chdir="$TF_DIR" output -raw sqs_interactive_queue_url 2>/dev/null)" || SQS_INTERACTIVE_URL=""
-fi
-if [ -z "$SQS_INTERACTIVE_URL" ]; then
-  echo "WARN: sqs_interactive_queue_url 없음 — SQS_QUEUE_INTERACTIVE_URL 을 bulk 와 동일하게 둡니다(단일 큐 모드)." >&2
-  SQS_INTERACTIVE_URL="$SQS_URL"
+  SQS_QUEUE_URL="$(terraform -chdir="$TF_DIR" output -raw sqs_queue_url)"
 fi
 
 # DB_READER_HOST: 단일 RDS 시 writer 와 동일. Replica 생기면 rds_reader_endpoint 로 분리.
@@ -74,8 +66,8 @@ kubectl create secret generic "$SECRET_NAME" -n "$NAMESPACE" \
   --from-literal=DB_PASSWORD="$DB_PASSWORD" \
   --from-literal=ELASTICACHE_PRIMARY_ENDPOINT="$REDIS_EP" \
   --from-literal=REDIS_HOST="$REDIS_EP" \
-  --from-literal=SQS_QUEUE_URL="$SQS_URL" \
-  --from-literal=SQS_QUEUE_INTERACTIVE_URL="$SQS_INTERACTIVE_URL" \
+  --from-literal=SQS_QUEUE_NAME="$SQS_QUEUE_NAME" \
+  --from-literal=SQS_QUEUE_URL="$SQS_QUEUE_URL" \
   --dry-run=client -o yaml \
   | kubectl apply -f -
 

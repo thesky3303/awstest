@@ -23,11 +23,6 @@ output "sqs_queue_url" {
   value = module.sqs.reservation_queue_url
 }
 
-# write-api·GUI 예매 전용 (ticketing-reservation-ui.fifo) — worker-svc-ui 가 소비
-output "sqs_interactive_queue_url" {
-  value = module.sqs.reservation_interactive_queue_url
-}
-
 output "eks_cluster_name" {
   value = module.eks.cluster_name
 }
@@ -103,7 +98,6 @@ output "zzzzz" {
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name}
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.read_api_deployment_name}
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.write_api_deployment_name}
-
   .............................
   EOT
 }

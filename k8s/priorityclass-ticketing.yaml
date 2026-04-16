@@ -19,14 +19,6 @@ description: "조회 read-api"
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
-  name: ticketing-priority-worker-ui
-value: 100000
-globalDefault: false
-description: "GUI 큐(worker-svc-ui) — bulk 워커보다 우선"
----
-apiVersion: scheduling.k8s.io/v1
-kind: PriorityClass
-metadata:
   name: ticketing-priority-worker-bulk
 value: 10000
 globalDefault: false

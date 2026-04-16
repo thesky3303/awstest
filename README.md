@@ -174,7 +174,7 @@ terraform apply
   export DB_PASSWORD=
 
   bash ../k8s/scripts/apply-secrets-from-terraform.sh
-  kubectl apply -k ../k8s
+  kubectl apply -k ../k8s -n ${var.ticketing_namespace}
   bash ../k8s/scripts/sync-s3-endpoints-from-ingress.sh
   kubectl -n ${var.ticketing_namespace} patch cm ${var.ticketing_configmap_name} --type merge -p '{"data":{"DB_NAME":"ticketing"}}'
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name}
@@ -200,9 +200,9 @@ export DB_PASSWORD="tfvars에 넣었던 패스워드와 동일하게"
 # 설명: DB 비밀번호를 환경변수로 설정합니다(터미널 히스토리에 남지 않게 주의).
 
 bash ../k8s/scripts/apply-secrets-from-terraform.sh
-# 설명: Terraform output(DB/Redis/SQS)을 읽어 `ticketing-secrets` Secret을 클러스터에 생성/갱신합니다.
+# 설명: Terraform output(DB/Redis 등)과 입력(DB_PASSWORD)을 읽어 `ticketing-secrets` Secret을 클러스터에 생성/갱신합니다.
 
-kubectl apply -k ../k8s
+kubectl apply -k ../k8s -n ticketing
 # 설명: kustomize로 k8s 매니페스트를 한 번에 적용합니다(Deployment/Service/Ingress 등).
 
 bash ../k8s/scripts/sync-s3-endpoints-from-ingress.sh

@@ -38,7 +38,7 @@ from config import (
     SQS_BOTO_RETRY_MODE,
     SQS_CONNECT_TIMEOUT_SEC,
     SQS_ENABLED,
-    SQS_QUEUE_URL,
+    SQS_QUEUE_NAME,
     SQS_READ_TIMEOUT_SEC,
 )
 
@@ -56,11 +56,19 @@ def _boto_config() -> Config:
     )
 
 
-sqs = (
-    boto3.client("sqs", region_name=AWS_REGION, config=_boto_config())
-    if (SQS_ENABLED and SQS_QUEUE_URL)
-    else None
-)
+_sqs_client = boto3.client("sqs", region_name=AWS_REGION, config=_boto_config()) if SQS_ENABLED else None
+
+
+def _resolve_queue_url() -> str:
+    if not SQS_ENABLED:
+        raise RuntimeError("SQS is disabled (SQS_ENABLED=false). No sync DB fallback is configured.")
+    if not _sqs_client:
+        raise RuntimeError("SQS client is not initialized")
+    qname = str(SQS_QUEUE_NAME or "").strip()
+    if not qname:
+        raise RuntimeError("SQS_QUEUE_NAME is required when SQS is enabled")
+    resp = _sqs_client.get_queue_url(QueueName=qname)
+    return str(resp.get("QueueUrl") or "").strip()
 
 
 def _booking_result_key(booking_ref: str) -> str:
@@ -145,8 +153,7 @@ def send_booking_message(
 
     if not SQS_ENABLED:
         raise RuntimeError("SQS is disabled (SQS_ENABLED=false). No sync DB fallback is configured.")
-    if not sqs or not SQS_QUEUE_URL:
-        raise RuntimeError("SQS_QUEUE_URL is required when SQS is enabled")
+    queue_url = _resolve_queue_url()
 
     entity_id = _entity_id_from_payload(booking_type, payload or {})
     seq: int | None = None
@@ -169,8 +176,8 @@ def send_booking_message(
             # 순번은 UX용(대기열 연출)이라 실패해도 예매 자체는 진행한다.
             log.exception("queue enq counter incr 실패 (무시) type=%s entity_id=%s", booking_type, entity_id)
 
-    sqs.send_message(
-        QueueUrl=SQS_QUEUE_URL,
+    _sqs_client.send_message(
+        QueueUrl=queue_url,
         MessageGroupId=str(group_id),
         MessageDeduplicationId=dedup_id,
         MessageBody=raw,

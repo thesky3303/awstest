@@ -21,10 +21,16 @@ kubectl -n ticketing rollout restart deploy/read-api
 kubectl -n ticketing rollout restart deploy/write-api
 
 
+
 kubectl -n ticketing exec -it tools-once -- sh -lc '
 cd /work/ticketing-db/terraform &&
 WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" \
-python3 ../scripts/sqs_load_real_concert3.py --show-id 8 -E 1 -T 10'
+python3 ../scripts/sqs_load_real_concert3.py --show-id 100 -E 1 -T 10'
+
+
+
+kubectl -n ticketing exec -it tools-once -- sh -lc 'cd /work/ticketing-db/terraform && WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" python3 ../scripts/sqs_load_real_concert4.py --http-concurrency 2000 --duration-sec 10 --show-id 100 -n 40'
+
 
 
 
@@ -49,9 +55,13 @@ python3 ../scripts/sqs_load_real_concert.py -n 30000 --spread-users 30000 --via-
 
 
 전체 파드 조회
-watch -n 2 'kubectl -n ticketing get deploy read-api write-api worker-svc worker-svc-ui -o wide'
-워커만 조회
- watch -n 2 'kubectl get pods -n ticketing -l "app in (worker-svc,worker-svc-ui)"'
+
+watch -n 2 'kubectl get pods -A -o wide'
+
+3티어만 조회
+
+watch -n 2 'kubectl -n ticketing get deploy read-api write-api worker-svc -o wide'
+
 
 헬름 keda 삭제
 REGION="ap-northeast-2"

@@ -25,7 +25,19 @@ _ensure_python_deps() {
   }
   _pip_install --upgrade "pip>=26,<27"
   _pip_install boto3 pymysql redis
+  _pip_install aiohttp
   _pip_install "locust==2.34.0"
+}
+
+_ensure_os_deps() {
+  # tools-once 이미지(python:3.12-slim)는 Debian 계열.
+  # RDS 터널링용 socat + 리슨 포트 확인용(ss) 설치를 멱등 보장한다.
+  kubectl -n "$NS" exec "$POD" -- sh -lc '
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y >/dev/null
+    apt-get install -y socat iproute2 >/dev/null
+  '
 }
 
 _need_fresh_pod() {
@@ -40,6 +52,7 @@ _need_fresh_pod() {
 
 if ! _need_fresh_pod; then
   _sync_scripts
+  _ensure_os_deps
   _ensure_python_deps
   exit 0
 fi
@@ -95,4 +108,5 @@ if [ "$i" -ge "$max" ]; then
 fi
 
 _sync_scripts
+_ensure_os_deps
 _ensure_python_deps
