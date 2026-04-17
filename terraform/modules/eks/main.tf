@@ -122,7 +122,32 @@ resource "aws_iam_role_policy_attachment" "eks_node_ecr" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-# 워커 노드 그룹 — 평시 min/desired 로 비용 최소, max 로 피크 시 증설 여유(Cluster Autoscaler 권장)
+# 노드당 Pod 상한(보통 ENI·보조 IP 개수) 완화 — prefix delegation. 기존 클러스터에 vpc-cni 가 이미 있으면:
+#   terraform import 'module.eks.aws_eks_addon.vpc_cni' '<클러스터명>:vpc-cni'
+data "aws_eks_addon_version" "vpc_cni" {
+  addon_name         = "vpc-cni"
+  kubernetes_version = aws_eks_cluster.main.version
+  most_recent        = true
+}
+
+resource "aws_eks_addon" "vpc_cni" {
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "vpc-cni"
+  addon_version               = data.aws_eks_addon_version.vpc_cni.version
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  configuration_values = jsonencode({
+    env = {
+      ENABLE_PREFIX_DELEGATION = "true"
+      WARM_PREFIX_TARGET       = "1"
+    }
+  })
+
+  depends_on = [aws_eks_cluster.main]
+}
+
+# 워커 노드 그룹 — CA scale-up 한도는 scaling_config.max_size (AWS ASG). 태그 없으면 CA가 ASG를 못 찾음.
 resource "aws_eks_node_group" "app" {
   cluster_name    = aws_eks_cluster.main.name
   node_group_name = "${local.name_prefix}-app-nodes"
@@ -145,10 +170,40 @@ resource "aws_eks_node_group" "app" {
     aws_iam_role_policy_attachment.eks_node_worker,
     aws_iam_role_policy_attachment.eks_node_cni,
     aws_iam_role_policy_attachment.eks_node_ecr,
+    aws_eks_addon.vpc_cni,
     null_resource.cleanup_vpc_leftovers_post,
   ]
 
-  tags = { Name = "${local.name_prefix}-app-nodes", Environment = var.env }
+  # Cluster Autoscaler(Helm autoDiscovery)가 ASG를 찾으려면 두 태그가 ASG에 있어야 함.
+  # 없으면 CA는 동작해 보여도 scale-up 대상 그룹이 0이라 노드가 늘지 않고 파드만 Pending.
+  tags = merge(
+    {
+      Name        = "${local.name_prefix}-app-nodes"
+      Environment = var.env
+    },
+    {
+      "k8s.io/cluster-autoscaler/enabled"             = "true"
+      "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
+    }
+  )
+}
+
+# HPA(Resource)가 cpu/memory utilization 을 받으려면 metrics.k8s.io API 가 필요 — EKS 관리 애드온으로 고정
+data "aws_eks_addon_version" "metrics_server" {
+  addon_name         = "metrics-server"
+  kubernetes_version = aws_eks_cluster.main.version
+  most_recent        = true
+}
+
+resource "aws_eks_addon" "metrics_server" {
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "metrics-server"
+  addon_version               = data.aws_eks_addon_version.metrics_server.version
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+  # EKS metrics-server 애드온 configuration_values 스키마에 replicaCount(Helm) 없음 — 레플리카는 post_apply_k8s_bootstrap.sh 에서 kubectl scale
+
+  depends_on = [aws_eks_node_group.app]
 }
 
 # ALB Controller IAM (Ingress 자동 생성용)

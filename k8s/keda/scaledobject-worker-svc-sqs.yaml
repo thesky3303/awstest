@@ -5,22 +5,32 @@ metadata:
   labels:
     app: worker-svc
   annotations:
-    # 기본은 스케일 "비활성"(테스트 시 사용자가 paused-로 해제).
+    # 기본은 스케일 "비활성"(필요 시 scripts/worker-autoscale-on.sh 로 paused- 해제).
     autoscaling.keda.sh/paused: "true"
 spec:
   scaleTargetRef:
-    name: worker-svc
-  # 더 민감한 반응(큐 적체 시 빠른 scale-out, 적체 해소 후 빠른 scale-in)
+    name: worker-svc-burst
+  # scale-out 은 유지, scale-in 은 너무 빠르면 워커·노드가 동시에 빠졌다가 큐 재적체 시 Pending 반복
   pollingInterval: 2
-  cooldownPeriod: 60
-  # 기본은 서버 기동 시 1대 고정(Deployment replicas=1). autoscale ON 시 1~maxReplicaCount로 확장.
-  minReplicaCount: 1
-  maxReplicaCount: 8
+  cooldownPeriod: 180
+  # stable worker-svc 1대는 ScaledObject 밖. burst 만 0~39 (합계 최대 40).
+  minReplicaCount: 0
+  maxReplicaCount: 39
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleDown:
-          stabilizationWindowSeconds: 60
+          stabilizationWindowSeconds: 300
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 30
+            - type: Pods
+              value: 10
+              periodSeconds: 30
+          selectPolicy: Max
   triggers:
     - type: aws-sqs-queue
       authenticationRef:

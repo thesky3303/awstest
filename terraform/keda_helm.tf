@@ -15,6 +15,36 @@ provider "helm" {
   }
 }
 
+# KEDA 는 내장 system-cluster-critical — 앱(ticketing-priority-*) 보다 항상 위
+resource "null_resource" "apply_ticketing_priority_classes" {
+  triggers = {
+    priority_md5 = filemd5(abspath("${path.root}/../k8s/priorityclass-ticketing.yaml"))
+    cluster_name = module.eks.cluster_name
+  }
+
+  depends_on = [
+    module.eks,
+    data.external.terraform_host_exec_clis,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    environment = {
+      CLUSTER_NAME = module.eks.cluster_name
+      AWS_REGION   = var.aws_region
+      PC_FILE      = abspath("${path.root}/../k8s/priorityclass-ticketing.yaml")
+    }
+    command = <<-EOT
+set -euo pipefail
+_K="$(mktemp)"
+trap 'rm -f "$_K"' EXIT
+aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" --kubeconfig "$_K"
+export KUBECONFIG="$_K"
+kubectl apply -f "$PC_FILE"
+EOT
+  }
+}
+
 resource "helm_release" "keda" {
   count = var.install_keda ? 1 : 0
 
@@ -32,6 +62,7 @@ resource "helm_release" "keda" {
 
   values = [
     yamlencode({
+      priorityClassName = "system-cluster-critical"
       serviceAccount = {
         create      = true
         name        = "keda-operator"
@@ -42,7 +73,11 @@ resource "helm_release" "keda" {
 
   # KEDA 설치 중 생성되는 Service 등이 ALB Controller webhook을 호출할 수 있어,
   # 컨트롤러(webhook endpoints)가 준비되기 전에 실행되면 실패할 수 있다.
-  depends_on = [module.eks, null_resource.install_aws_load_balancer_controller]
+  depends_on = [
+    module.eks,
+    null_resource.install_aws_load_balancer_controller,
+    null_resource.apply_ticketing_priority_classes,
+  ]
 }
 
 resource "null_resource" "keda_cleanup_on_destroy" {
@@ -52,7 +87,7 @@ resource "null_resource" "keda_cleanup_on_destroy" {
     cluster_name = module.eks.cluster_name
     aws_region   = var.aws_region
     # 스크립트 변경 시 재실행
-    script_md5   = filemd5("${path.module}/scripts/keda_cleanup_on_destroy.sh")
+    script_md5 = filemd5("${path.module}/scripts/keda_cleanup_on_destroy.sh")
   }
 
   depends_on = [
@@ -66,10 +101,10 @@ resource "null_resource" "keda_cleanup_on_destroy" {
     interpreter = ["bash", "-c"]
     when        = destroy
     environment = {
-      CLUSTER_NAME = self.triggers.cluster_name
-      AWS_REGION   = self.triggers.aws_region
-      KEDA_NAMESPACE     = "keda"
-      KEDA_RELEASE_NAME  = "keda"
+      CLUSTER_NAME      = self.triggers.cluster_name
+      AWS_REGION        = self.triggers.aws_region
+      KEDA_NAMESPACE    = "keda"
+      KEDA_RELEASE_NAME = "keda"
       # destroy가 길어지지 않게 빠르게 정리(필요 시 finalizer 조기 제거)
       KEDA_CLEANUP_WAIT_SEC = "120"
       # 1이면 namespace finalizers 강제 제거(최후 수단). 기본 0.

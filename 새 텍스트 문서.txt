@@ -6,20 +6,32 @@ bash ../scripts/redis-flush-cache.sh
 
 bash ../scripts/img.sh
 
+
+kubectl delete pod tools-once -n ticketing
 bash ../scripts/tools-once-setup.sh
 
 WORKER_DEMO_DELAY_ENABLED=true
 WORKER_DEMO_DELAY_MS=1500
 WORKER_DEMO_DELAY_JITTER_MS=500
 
+bash ../scripts/install-cluster-autoscaler.sh
+
 bash ../scripts/worker-autoscale-on.sh
 
 bash ../scripts/worker-autoscale-off.sh
 
-kubectl -n ticketing rollout restart deploy/worker-svc
-kubectl -n ticketing rollout restart deploy/read-api
-kubectl -n ticketing rollout restart deploy/write-api
+kubectl -n ticketing rollout restart deploy/worker-svc deploy/worker-svc-burst || true
+kubectl -n ticketing rollout restart deploy/read-api deploy/read-api-burst || true
+kubectl -n ticketing rollout restart deploy/write-api deploy/write-api-burst || true
 
+
+bash ../scripts/run_concert5_then_snapshot.sh --http-concurrency 2000 --duration-sec 10 --show-id 100 -n 30
+
+
+bash ../scripts/k8s-snapshot-host.sh
+
+bash ../scripts/set-test-capacity.sh -n 9 -wr 23 -r 1 -wk 39
+bash ../scripts/set-test-capacity.sh --restore
 
 
 kubectl -n ticketing exec -it tools-once -- sh -lc '
@@ -29,7 +41,7 @@ python3 ../scripts/sqs_load_real_concert3.py --show-id 100 -E 1 -T 10'
 
 
 
-kubectl -n ticketing exec -it tools-once -- sh -lc 'cd /work/ticketing-db/terraform && WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" python3 ../scripts/sqs_load_real_concert4.py --http-concurrency 2000 --duration-sec 10 --show-id 100 -n 40'
+kubectl -n ticketing exec -it tools-once -- sh -lc 'cd /work/ticketing-db/terraform && WRITE_API_BASE_URL="http://write-api.ticketing.svc.cluster.local:5001" python3 ../scripts/sqs_load_real_concert5.py --http-concurrency 2000 --duration-sec 10 -&& bash ../scripts/k8s-snapshot-host.sh
 
 
 
@@ -73,6 +85,24 @@ aws eks update-kubeconfig --region "$REGION" --name "$CLUSTER_NAME"
 helm uninstall keda -n keda
 
 
+살아있는 파드
+watch -n 2 "
+printf '%-12s %-70s %-7s %-12s %-8s %-8s %-15s %-35s\n' NAMESPACE NAME READY STATUS RESTARTS AGE IP NODE
+
+kubectl get pods -A -o wide --no-headers \
+| sort -k1,1 -k2,2 \
+| awk '{printf \"%-12s %-70s %-7s %-12s %-8s %-8s %-15s %-35s\n\", \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8}'"
+
+
+펜딩 파드
+
+watch -n 2 "
+printf '%-12s %-70s %-7s %-12s %-8s %-8s %-15s %-35s\n' NAMESPACE NAME READY STATUS RESTARTS AGE IP NODE
+
+kubectl get pods -A -o wide --no-headers \
+| awk '\$4 == \"Pending\"' \
+| sort -k1,1 -k2,2 \
+| awk '{printf \"%-12s %-70s %-7s %-12s %-8s %-8s %-15s %-35s\n\", \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8}'"
 
 
 모니터링팀에게 전달할 “API가 정의된 파일”

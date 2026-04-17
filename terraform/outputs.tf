@@ -32,6 +32,18 @@ output "eks_app_node_group_name" {
   description = "App EKS managed node group (read/write nodes)."
 }
 
+output "eks_node_group_scaling_summary" {
+  description = <<-EOT
+    노드 그룹 min / desired / max. max = Cluster Autoscaler가 늘릴 수 있는 상한(ASG). 무제한 아님.
+    Pending 지속 시: max 여유·k8s.io/cluster-autoscaler/* 태그·CA 파드 Running·CA 로그(scale-up fail) 확인.
+  EOT
+  value = {
+    min     = var.eks_app_node_min_size
+    desired = var.eks_app_node_desired_size
+    max     = var.eks_app_node_max_size
+  }
+}
+
 output "vpc_id" {
   value = module.network.vpc_id
 }
@@ -81,23 +93,37 @@ output "frontend_cloudfront_url" {
   value       = var.enable_s3_hosting_v2_module ? module.s3_hosting_v2.cloudfront_url : null
 }
 
+# sync-s3-endpoints-from-ingress.sh 등에서 모드 확인용 (CloudFront 없는 스택인지 terraform 이 한글로 알려줌).
+output "frontend_routing_mode" {
+  description = "none | s3_website_alb_origin_js | cloudfront_alb — 프론트·API 오리진 연결 방식."
+  value = (
+    !var.enable_s3_hosting_v2_module ? "none"
+    : var.enable_cloudfront_for_frontend ? "cloudfront_alb"
+    : "s3_website_alb_origin_js"
+  )
+}
+
 output "zzzzz" {
   description = "Commands to run after apply."
   value       = <<-EOT
 
   .............................
 
+  용량: terraform output eks_node_group_scaling_summary — max 는 반드시 desired 보다 커야 CA 가 노드 증설.
+  ASG 태그: 노드 그룹에 k8s.io/cluster-autoscaler/enabled, k8s.io/cluster-autoscaler/<클러스터명>=owned (Terraform 반영).
+
   export DB_USER=root
   export DB_PASSWORD=
 
   bash ../scripts/normalize-line-endings.sh
   bash ../k8s/scripts/apply-secrets-from-terraform.sh
+  bash ../scripts/install-cluster-autoscaler.sh
   kubectl apply -k ../k8s
   bash ../k8s/scripts/sync-s3-endpoints-from-ingress.sh
   kubectl -n ${var.ticketing_namespace} patch cm ${var.ticketing_configmap_name} --type merge -p '{"data":{"DB_NAME":"ticketing"}}'
-  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name}
-  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.read_api_deployment_name}
-  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.write_api_deployment_name}
+  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name} deploy/${var.worker_deployment_name}-burst || true
+  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.read_api_deployment_name} deploy/${var.read_api_deployment_name}-burst || true
+  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.write_api_deployment_name} deploy/${var.write_api_deployment_name}-burst || true
   .............................
   EOT
 }

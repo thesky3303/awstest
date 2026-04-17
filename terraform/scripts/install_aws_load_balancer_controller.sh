@@ -37,6 +37,7 @@ helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-contro
   --set "clusterName=${CLUSTER_NAME}" \
   --set "region=${AWS_REGION}" \
   --set "vpcId=${VPC_ID}" \
+  --set-string priorityClassName=system-cluster-critical \
   --set replicaCount=1 \
   --set serviceAccount.create=true \
   --set serviceAccount.name=aws-load-balancer-controller \

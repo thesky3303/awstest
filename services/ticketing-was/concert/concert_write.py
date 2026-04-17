@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from config import BOOKING_QUEUE_COUNTER_TTL_SEC, DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
 from sqs_client import get_booking_status_dict, send_booking_message
 from concert.sale_state import get_sale_state, set_sale_state
-from concert.seat_hold import release_seats, try_hold_seats
+from concert.seat_hold import adjust_remain, release_seats, try_decrease_remain_if_enough, try_hold_seats
 from cache.redis_client import redis_client
 from waiting_room import (
     enter as wr_enter,
@@ -368,41 +368,10 @@ def commit_concert_booking(payload: dict):
             content={"ok": False, "code": "NO_SEATS", "message": "좌석을 선택해주세요."},
         )
 
-    # DB 단일 진실 기반의 선검사(조기 실패):
-    # - remain_count가 부족하면 SOLD_OUT
-    # - 이미 ACTIVE 좌석이면 DUPLICATE_SEAT
-    show_row = _db_show_snapshot(show_id=show_id)
-    if not show_row:
-        return JSONResponse(status_code=404, content={"ok": False, "code": "NOT_FOUND"})
-    try:
-        seat_rows = int(show_row.get("seat_rows") or 0)
-        seat_cols = int(show_row.get("seat_cols") or 0)
-    except Exception:
-        seat_rows, seat_cols = 0, 0
-    for r, c in parsed_seats:
-        if seat_rows > 0 and r > seat_rows:
-            return JSONResponse(status_code=409, content={"ok": False, "code": "INVALID_SEAT"})
-        if seat_cols > 0 and c > seat_cols:
-            return JSONResponse(status_code=409, content={"ok": False, "code": "INVALID_SEAT"})
-    try:
-        remain_db = int(show_row.get("remain_count") or 0)
-    except Exception:
-        remain_db = 0
-    if remain_db < req_count:
-        return JSONResponse(status_code=409, content={"ok": False, "code": "SOLD_OUT"})
-    try:
-        if _db_any_active_seat(show_id=show_id, seats=parsed_seats):
-            return JSONResponse(status_code=409, content={"ok": False, "code": "DUPLICATE_SEAT"})
-    except pymysql.err.Error:
-        log.exception("commit_concert_booking: DB error during active seat check show_id=%s", show_id)
-        return JSONResponse(
-            status_code=503,
-            content={
-                "ok": False,
-                "code": "DB_UNAVAILABLE",
-                "message": "일시적으로 예매 검증을 수행할 수 없습니다. 잠시 후 다시 시도해주세요.",
-            },
-        )
+    # Concert6 방향(라우트 추가 없이): commit에서 DB 선검사를 제거하고,
+    # Redis remain(단일 카운터) + Redis hold(주황)로 "접수 즉시 반영"을 우선한다.
+    # remain 카운터가 없으면 1회 seed (reset 직후 등)
+    _seed_remain_count_if_missing(show_id)
 
     # Waiting Room(입장 대기열): permit 없이는 커밋을 받지 않는다(새치기 방지).
     if not wr_verify_permit(permit_token=permit_token, kind="concert", entity_id=show_id, user_id=user_id):
@@ -448,13 +417,23 @@ def commit_concert_booking(payload: dict):
         # "바로 큐로" 경로 (레거시/테스트): 홀드를 걸지 않고 큐에 넣는다.
         pass
     else:
-        # 1) 홀드(주황) 경로: 좌석 단위 선점으로 remain이 즉시 줄어들게 한다.
+        # 1) remain 선차감(충분할 때만) — 즉시 매진 처리(주황/백그라운드 연출의 핵심)
+        ok_remain, remain_after = try_decrease_remain_if_enough(show_id=show_id, count=req_count)
+        if not ok_remain:
+            return JSONResponse(status_code=409, content={"ok": False, "code": "SOLD_OUT", "remain": remain_after})
+
+        # 2) 홀드(주황) 경로: 좌석 단위 선점. remain은 이미 차감했으므로 여기서는 차감하지 않는다.
         try:
             hold = try_hold_seats(
-                show_id=show_id, seats=parsed_seats, booking_ref=booking_ref
+                show_id=show_id,
+                seats=parsed_seats,
+                booking_ref=booking_ref,
+                adjust_remain_count=False,
             )
         except pymysql.err.Error:
             log.exception("commit_concert_booking: DB error during hold/confirmed check show_id=%s", show_id)
+            # remain은 선차감했으니 실패 시 복구
+            adjust_remain(show_id=show_id, delta=req_count)
             return JSONResponse(
                 status_code=503,
                 content={
@@ -465,6 +444,8 @@ def commit_concert_booking(payload: dict):
             )
         if not hold.get("ok"):
             code = hold.get("code") or "DUPLICATE_SEAT"
+            # remain은 선차감했으니 실패 시 복구
+            adjust_remain(show_id=show_id, delta=req_count)
             # confirmed 좌석은 hold로 덮을 수 없음(회색->주황 금지)
             if str(code) == "CONFIRMED_SEAT":
                 return JSONResponse(status_code=409, content={"ok": False, "code": "DUPLICATE_SEAT"})
@@ -495,6 +476,9 @@ def commit_concert_booking(payload: dict):
         # enqueue 실패는 접수 자체가 실패이므로 hold를 즉시 원복한다.
         if hold_applied:
             release_seats(show_id=show_id, seats=parsed_seats, booking_ref=booking_ref)
+        else:
+            # skip_hold=true인데 remain을 선차감하지 않았으므로 별도 복구 없음
+            pass
         raise
     return {
         "ok": True,

@@ -5,6 +5,7 @@ set -euo pipefail
 
 # tr … | bash 으로 실행될 때 BASH_SOURCE 가 비므로 TF 가 REPO_ROOT 를 넘김
 : "${REPO_ROOT:?}"
+TF_DIR="$REPO_ROOT/terraform"
 
 : "${EKS_CLUSTER_NAME:?}"
 : "${AWS_REGION:?}"
@@ -50,6 +51,42 @@ export KUBECONFIG="$_TMP_KUBECONFIG"
 trap 'rm -f "$_TMP_KUBECONFIG"' EXIT
 aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --kubeconfig "$_TMP_KUBECONFIG"
 
+echo "=== wait for metrics-server (HPA uses metrics.k8s.io) ==="
+for _ in $(seq 1 90); do
+  if kubectl get apiservice v1beta1.metrics.k8s.io >/dev/null 2>&1; then
+    _st="$(kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)"
+    if [[ "$_st" == "True" ]]; then
+      break
+    fi
+  fi
+  sleep 2
+done
+
+# EKS 관리 metrics-server 애드온 CreateAddon configuration_values 에는 Helm 의 replicaCount 가 없음(스키마 거부).
+# 원하는 레플리카는 여기서만 반영 (METRICS_SERVER_REPLICAS 는 k8s_bootstrap.tf local-exec env).
+MS_REPLICAS="${METRICS_SERVER_REPLICAS:-1}"
+echo "=== metrics-server scale (replicas=$MS_REPLICAS) ==="
+for _ in $(seq 1 90); do
+  if kubectl get deploy metrics-server -n kube-system >/dev/null 2>&1; then
+    kubectl -n kube-system scale deploy metrics-server --replicas="$MS_REPLICAS" || true
+    break
+  fi
+  sleep 2
+done
+kubectl wait --for=condition=available deployment/metrics-server -n kube-system --timeout=180s 2>/dev/null || true
+
+if ! command -v helm >/dev/null 2>&1; then
+  echo "ERROR: helm 이 필요합니다 (Cluster Autoscaler Helm). apply 호스트에 helm 을 설치하거나 verify_terraform_host_cli 가 설치되도록 Linux/macOS 에서 apply 하세요." >&2
+  exit 1
+fi
+echo "=== cluster-autoscaler (Helm, 노드 ASG — Pending 파드 시 스케일아웃) ==="
+bash "$REPO_ROOT/scripts/install-cluster-autoscaler.sh"
+
+if command -v terraform >/dev/null 2>&1; then
+  echo "=== eks_node_group_scaling_summary (max > desired 여야 CA scale-up 가능) ==="
+  terraform -chdir="$TF_DIR" output eks_node_group_scaling_summary 2>/dev/null || true
+fi
+
 export DB_PASSWORD
 echo "=== apply-secrets-from-terraform ==="
 NAMESPACE="$NS" bash "$REPO_ROOT/k8s/scripts/apply-secrets-from-terraform.sh"
@@ -57,7 +94,6 @@ NAMESPACE="$NS" bash "$REPO_ROOT/k8s/scripts/apply-secrets-from-terraform.sh"
 echo "=== kubectl apply -k (rendered) ==="
 kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS" >/dev/null
 
-TF_DIR="$REPO_ROOT/terraform"
 ACCOUNT_ID="$(terraform -chdir="$TF_DIR" output -raw aws_account_id 2>/dev/null)"
 REGION="$(terraform -chdir="$TF_DIR" output -raw aws_region 2>/dev/null)"
 SQS_ROLE_ARN="$(terraform -chdir="$TF_DIR" output -raw sqs_access_role_arn 2>/dev/null)"
@@ -73,8 +109,11 @@ kubectl apply -k "$tmp_k8s/k8s" -n "$NS"
 # kustomize 바이너리 없이도 동일하게 이미지 태그/레지스트리를 반영.
 # (kustomization.yaml 의 images/newTag 을 편집하는 대신, 실제 Deployment에 이미지 주입)
 kubectl -n "$NS" set image deploy/"$READ_API" "read-api=${WAS_IMAGE}" >/dev/null
+kubectl -n "$NS" set image deploy/"${READ_API}-burst" "read-api=${WAS_IMAGE}" >/dev/null 2>&1 || true
 kubectl -n "$NS" set image deploy/"$WRITE_API" "write-api=${WAS_IMAGE}" >/dev/null
+kubectl -n "$NS" set image deploy/"${WRITE_API}-burst" "write-api=${WAS_IMAGE}" >/dev/null 2>&1 || true
 kubectl -n "$NS" set image deploy/"$WORKER" "worker-svc=${WORKER_IMAGE}" >/dev/null
+kubectl -n "$NS" set image deploy/"${WORKER}-burst" "worker-svc=${WORKER_IMAGE}" >/dev/null 2>&1 || true
 
 kubectl -n "$NS" annotate sa sqs-access-sa "eks.amazonaws.com/role-arn=${SQS_ROLE_ARN}" --overwrite >/dev/null 2>&1 || true
 
@@ -102,7 +141,10 @@ echo "=== patch configmap + rollouts ==="
 kubectl -n "$NS" patch cm "$CM" --type merge -p "{\"data\":{\"DB_NAME\":\"${DB_SCHEMA_NAME}\"}}" || true
 kubectl -n "$NS" patch cm "$CM" --type merge -p "{\"data\":{\"AWS_REGION\":\"$AWS_REGION\"}}" || true
 kubectl -n "$NS" rollout restart deploy/"$WORKER" || true
+kubectl -n "$NS" rollout restart deploy/"${WORKER}-burst" || true
 kubectl -n "$NS" rollout restart deploy/"$READ_API" || true
+kubectl -n "$NS" rollout restart deploy/"${READ_API}-burst" || true
 kubectl -n "$NS" rollout restart deploy/"$WRITE_API" || true
+kubectl -n "$NS" rollout restart deploy/"${WRITE_API}-burst" || true
 
 echo "=== post_apply_k8s_bootstrap done ==="

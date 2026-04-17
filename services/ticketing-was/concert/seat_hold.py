@@ -288,6 +288,14 @@ def remove_confirmed_seats(*, show_id: int, seat_keys: List[str]) -> None:
 def any_confirmed(*, show_id: int, seats: List[Tuple[int, int]]) -> bool:
     if not seats:
         return False
+    # confirmed set이 비어있다면(=아직 확정 좌석이 전혀 없다면) DB까지 갈 필요가 없다.
+    # 대량 오픈 직후에는 이 케이스가 대부분이라, 여기서 DB fallback을 막아야 write(hold) 경로가 빨라진다.
+    try:
+        if int(redis_client.scard(_confirmed_set_key(show_id)) or 0) <= 0:
+            return False
+    except Exception:
+        # scard 실패는 보수적으로 기존 로직으로 진행
+        pass
     try:
         sk = _confirmed_set_key(show_id)
         pipe = redis_client.pipeline()

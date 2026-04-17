@@ -15,4 +15,4 @@ output "app_node_group_name" {
   description = "Managed node group name for app nodes (read/write, etc)."
 }
 
- 
+

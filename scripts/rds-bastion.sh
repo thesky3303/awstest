@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # RDS writer 로 socat 터널 Pod + (선택) port-forward. terraform output 으로 엔드포인트 조회.
-# ticketing-priority-ops + 작은 requests 로, 평시에는 슬롯을 거의 안 쓰고, 노드가 꽉 차면 bulk 워커만 밀릴 수 있음.
+# ticketing-priority-devtools(preemption Never) + 작은 requests. 워커를 선점하지 않음.
 set -euo pipefail
 
 NS="${KUBECTL_NAMESPACE:-ticketing}"
@@ -27,7 +27,7 @@ metadata:
   name: ${POD}
   namespace: ${NS}
 spec:
-  priorityClassName: ticketing-priority-ops
+  priorityClassName: ticketing-priority-devtools
   restartPolicy: Never
   containers:
     - name: socat

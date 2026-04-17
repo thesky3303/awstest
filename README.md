@@ -198,7 +198,7 @@ export DB_PASSWORD="tfvars에 넣었던 패스워드와 동일하게"
 bash ../k8s/scripts/apply-secrets-from-terraform.sh
 # 설명: Terraform output(DB/Redis 등)과 입력(DB_PASSWORD)을 읽어 `ticketing-secrets` Secret을 클러스터에 생성/갱신합니다.
 
-kubectl apply -k ../k8s -n ticketing
+kubectl apply -k ../k8s (네임스페이스 필요하다면지정 ex) -n ticketing)
 # 설명: kustomize로 k8s 매니페스트를 한 번에 적용합니다(Deployment/Service/Ingress 등).
 
 bash ../k8s/scripts/sync-s3-endpoints-from-ingress.sh

@@ -9,10 +9,15 @@ resources:
   - sqs-service-account.yaml
   - pdb-user-facing.yaml
   - read-api/deployment.yaml
+  - read-api/deployment-burst.yaml
   - read-api/service.yaml
+  - read-api/hpa.yaml
   - write-api/deployment.yaml
+  - write-api/deployment-burst.yaml
   - write-api/service.yaml
+  - write-api/hpa.yaml
   - worker-svc/deployment.yaml
+  - worker-svc/deployment-burst.yaml
   - worker-svc/service.yaml
   - ingress.yaml
 

@@ -185,13 +185,16 @@ variable "elasticache_node_type" {
 variable "eks_app_node_instance_types" {
   type        = list(string)
   default     = ["t3.small"]
-  description = "EKS 워커 인스턴스. 피크 시 노드 수만 늘리면 read-api/worker 파드 수용."
+  description = "EKS 워커 인스턴스. 기본 t3.small. 노드당 최대 파드는 vpc-cni prefix delegation 으로 완화."
 }
 
 variable "eks_app_node_desired_size" {
   type        = number
   default     = 2
-  description = "평시 desired 노드 수 (Pod 밀도 한도로 1노드가 부족할 때 2 권장)."
+  description = <<-EOT
+    평시 desired 노드 수 (Pod 밀도 한도로 1노드가 부족할 때 2 권장).
+    Cluster Autoscaler가 부하 시 노드를 더 띄우려면 eks_app_node_max_size 가 이 값보다 커야 함(검증 참고).
+  EOT
 }
 
 variable "eks_app_node_min_size" {
@@ -202,15 +205,40 @@ variable "eks_app_node_min_size" {
 
 variable "eks_app_node_max_size" {
   type        = number
-  default     = 12
+  default     = 40
   description = <<-EOT
-    피크 시 노드 상한 예시: read-api replica·워커·시스템 파드 합산.
-    12×t3.small 수준은 “수만~수십만 RPS급 HTTP”까지는 ALB·앱 한도와 별도로 튜닝 필요.
-    실제 100만 동시는 CloudFront·정적 분리·캐시 적중률·Reader 추가와 함께 설계한다.
+    노드 그룹 ASG max — Cluster Autoscaler 상한. 숫자 클수록 최대 과금(노드 수×인스턴스 단가) 상한도 커짐.
+    EC2 할당량 부족 시 scale-up 실패 가능.
   EOT
 
   validation {
     condition     = var.eks_app_node_max_size >= var.eks_app_node_desired_size && var.eks_app_node_desired_size >= var.eks_app_node_min_size && var.eks_app_node_min_size >= 1
     error_message = "eks_app_node_max_size >= desired >= min >= 1 이어야 합니다."
+  }
+
+  validation {
+    condition = (
+      var.eks_app_node_max_size > var.eks_app_node_desired_size
+      || (var.eks_app_node_min_size == 1 && var.eks_app_node_desired_size == 1 && var.eks_app_node_max_size == 1)
+    )
+    error_message = <<-EOT
+      Cluster Autoscaler scale-up: max_size 는 desired_size 보다 커야 추가 노드를 띄울 수 있습니다.
+      (예외: min=desired=max=1 인 단일 노드 전용 클러스터만 허용.)
+      desired=2, max=2 처럼 두면 HPA·KEDA가 파드만 늘리고 노드는 영원히 2대에 묶여 Pending 이 반복됩니다.
+    EOT
+  }
+}
+
+variable "eks_metrics_server_replica_count" {
+  type        = number
+  default     = 1
+  description = <<-EOT
+    metrics-server Deployment 레플리카 수. EKS 애드온 API는 replica 설정을 받지 않으므로 apply 후 post_apply_k8s_bootstrap.sh 가 kubectl scale 로 반영.
+    기본 1은 소형 노드 풀 부담 완화, HA면 2.
+  EOT
+
+  validation {
+    condition     = var.eks_metrics_server_replica_count >= 1 && var.eks_metrics_server_replica_count <= 2
+    error_message = "eks_metrics_server_replica_count 는 1 또는 2 여야 합니다."
   }
 }
