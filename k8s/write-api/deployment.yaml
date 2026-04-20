@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: write-api
+  namespace: ticketing
   labels:
     app: write-api
 spec:

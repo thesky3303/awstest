@@ -32,6 +32,11 @@ output "eks_app_node_group_name" {
   description = "App EKS managed node group (read/write nodes)."
 }
 
+output "eks_node_role_arn" {
+  description = "IAM role ARN used by EKS worker nodes (for aws-auth mapRoles)."
+  value       = module.eks.node_role_arn
+}
+
 output "eks_node_group_scaling_summary" {
   description = <<-EOT
     노드 그룹 min / desired / max. max = Cluster Autoscaler가 늘릴 수 있는 상한(ASG). 무제한 아님.

@@ -47,11 +47,19 @@ if kubectl get ns "$NS" >/dev/null 2>&1; then
   kubectl -n "$NS" get secret 2>/dev/null \
     | awk '{print $1}' \
     | grep "^sh\\.helm\\.release\\.v1\\.${REL}\\." \
-    | xargs -r kubectl -n "$NS" delete secret --ignore-not-found >/dev/null 2>&1 || true
+    | xargs -r kubectl -n "$NS" delete secret --ignore-not-found --wait=false >/dev/null 2>&1 || true
 fi
 
 # 3) Try to delete namespace (optional, but helps remove webhooks in some broken states)
-kubectl delete ns "$NS" --ignore-not-found >/dev/null 2>&1 || true
+# Default kubectl delete ns blocks until the object is gone; Terminating can take unbounded time
+# and skips the timed loop below. Prefer async delete; fall back to capped synchronous delete.
+if ! kubectl delete ns "$NS" --ignore-not-found --wait=false >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${WAIT_SEC}s" kubectl delete ns "$NS" --ignore-not-found >/dev/null 2>&1 || true
+  else
+    kubectl delete ns "$NS" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+fi
 
 deadline=$(( $(date +%s) + WAIT_SEC ))
 start_ts="$(date +%s)"

@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: worker-svc
+  namespace: ticketing
   labels:
     app: worker-svc
 spec:

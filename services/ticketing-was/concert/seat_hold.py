@@ -5,17 +5,11 @@ import logging
 import time
 from typing import Dict, List, Tuple
 
-import pymysql
 from cache.redis_client import redis_client
 from config import (
     CONCERT_CONFIRMED_SET_TTL_SEC,
     CONCERT_SEAT_HOLD_TTL_SEC,
     CONCERT_SEAT_HOLD_SOLDOUT_TTL_SEC,
-    DB_HOST,
-    DB_NAME,
-    DB_PASSWORD,
-    DB_PORT,
-    DB_USER,
 )
 
 log = logging.getLogger(__name__)
@@ -288,6 +282,20 @@ def remove_confirmed_seats(*, show_id: int, seat_keys: List[str]) -> None:
 def any_confirmed(*, show_id: int, seats: List[Tuple[int, int]]) -> bool:
     if not seats:
         return False
+
+    # 0차 가드(무DB): worker-svc가 성공 시 좌석 키에 남기는 "CONFIRMED" 문자열.
+    # commit 경로에서 read:v2 스냅샷을 자주 지우므로, 스냅샷/DB 폴백에만 의존하면 RDS가 터질 수 있다.
+    try:
+        pipe0 = redis_client.pipeline()
+        for r, c in seats:
+            pipe0.get(_seat_key(show_id, int(r), int(c)))
+        vals = pipe0.execute() or []
+        for v in vals:
+            if str(v or "").strip().upper() == "CONFIRMED":
+                return True
+    except Exception:
+        pass
+
     # confirmed set이 비어있다면(=아직 확정 좌석이 전혀 없다면) DB까지 갈 필요가 없다.
     # 대량 오픈 직후에는 이 케이스가 대부분이라, 여기서 DB fallback을 막아야 write(hold) 경로가 빨라진다.
     try:
@@ -324,49 +332,10 @@ def any_confirmed(*, show_id: int, seats: List[Tuple[int, int]]) -> bool:
             if f"{int(r)}-{int(c)}" in confirmed_set:
                 return True
     except Exception:
-        # 최후 가드: DB ACTIVE 좌석을 직접 확인한다.
-        # reset 등으로 confirmed set/스냅샷이 비어있는 상태에서 write가 들어오면,
-        # Redis hold가 DB 확정을 모르고 중복 홀드를 허용할 수 있다.
-        # 이 경우 worker에서 IntegrityError(DUPLICATE_SEAT)가 대량으로 발생하므로,
-        # write(hold) 단계에서 DB를 확인해 조기에 차단한다.
-        # DB 조회 실패 시 False(fail-open)는 홀드·QUEUED 후 워커 중복만 드러나므로 예외를 전파한다.
-        conn = None
-        try:
-            conn = pymysql.connect(
-                host=DB_HOST,
-                port=DB_PORT,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                database=DB_NAME,
-                charset="utf8mb4",
-                cursorclass=pymysql.cursors.DictCursor,
-                autocommit=True,
-            )
-            with conn.cursor() as cur:
-                clauses = []
-                params: list[int] = [int(show_id)]
-                for r, c in seats:
-                    clauses.append("(seat_row_no=%s AND seat_col_no=%s)")
-                    params.extend([int(r), int(c)])
-                where_seats = " OR ".join(clauses) if clauses else "1=0"
-                cur.execute(
-                    "SELECT 1 FROM concert_booking_seats "
-                    "WHERE show_id=%s AND UPPER(COALESCE(status,''))='ACTIVE' AND ("
-                    + where_seats +
-                    ") LIMIT 1",
-                    tuple(params),
-                )
-                row = cur.fetchone()
-                return bool(row)
-        except pymysql.err.Error:
-            log.exception("any_confirmed: DB fallback check failed show_id=%s", show_id)
-            raise
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+        # DB 폴백 제거: 스냅샷이 없을 때마다 커밋당 pymysql 연결은 RDS/커넥션 풀을 붕괴시키고
+        # DB_UNAVAILABLE(503)로 "로스"처럼 보이게 만든다. 최종 정합은 좌석 NX + 워커 유니크로 맡긴다.
+        # (Redis만 비우고 DB에 ACTIVE가 남은 테스트면 워커에서 DUPLICATE로 떨어진다.)
+        return False
     return False
 
 

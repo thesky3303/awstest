@@ -3,6 +3,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: write-api-pdb
+  namespace: ticketing
 spec:
   minAvailable: 1
   selector:
@@ -13,6 +14,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: read-api-pdb
+  namespace: ticketing
 spec:
   minAvailable: 1
   selector:

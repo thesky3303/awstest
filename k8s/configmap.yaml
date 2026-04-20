@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ticketing-config
+  namespace: ticketing
 data:
   # SQS/boto3/KEDA ScaledObject(awsRegion)와 동일 리전으로 맞출 것 (terraform aws_region).
   AWS_REGION: "ap-northeast-2"

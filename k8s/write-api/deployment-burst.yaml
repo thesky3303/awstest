@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: write-api-burst
+  namespace: ticketing
   labels:
     app: write-api
     pool: burst

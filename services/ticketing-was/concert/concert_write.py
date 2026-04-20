@@ -430,9 +430,10 @@ def commit_concert_booking(payload: dict):
                 booking_ref=booking_ref,
                 adjust_remain_count=False,
             )
-        except pymysql.err.Error:
-            log.exception("commit_concert_booking: DB error during hold/confirmed check show_id=%s", show_id)
-            # remain은 선차감했으니 실패 시 복구
+        except Exception:
+            # 홀드 경로는 Redis(any_confirmed / SET NX / hold set)만 사용한다.
+            # Redis 타임아웃·연결 끊김 등도 여기로 모이므로 pymysql 한정이면 잡히지 않는다.
+            log.exception("commit_concert_booking: hold path failed (Redis/내부 오류) show_id=%s", show_id)
             adjust_remain(show_id=show_id, delta=req_count)
             return JSONResponse(
                 status_code=503,

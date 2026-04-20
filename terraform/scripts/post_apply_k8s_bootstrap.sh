@@ -104,7 +104,19 @@ WORKER_IMAGE="${ECR_REGISTRY}/${ECR_REPO_WORKER_SVC}:${IMAGE_TAG}"
 tmp_k8s="$(mktemp -d)"
 cp -R "$REPO_ROOT/k8s" "$tmp_k8s/k8s"
 
-kubectl apply -k "$tmp_k8s/k8s" -n "$NS"
+# 루트 kustomization: ticketing + kube-system(metrics-server PDB). -n 을 붙이면 멀티 네임스페이스 매니페스트와 충돌할 수 있음.
+# PDB 는 spec 에 minAvailable XOR maxUnavailable 만 허용. 예전 매니페스트/병합으로 둘 다 남으면 apply 가 실패하므로 선삭제.
+kubectl delete pdb metrics-server -n kube-system --ignore-not-found >/dev/null 2>&1 || true
+kubectl apply -k "$tmp_k8s/k8s"
+
+# EKS 애드온 Deployment 는 kustomize 리소스에 넣지 않음(전체 덮어쓰기 위험). PDB 만 apply-k 로 관리.
+echo "=== metrics-server priorityClass (addon Deployment patch) ==="
+if kubectl -n kube-system get deploy metrics-server >/dev/null 2>&1; then
+  kubectl -n kube-system patch deployment metrics-server --type=strategic -p \
+    '{"spec":{"template":{"spec":{"priorityClassName":"system-cluster-critical"}}}}' 2>/dev/null || \
+    echo "WARN: metrics-server priorityClass patch failed (addon may reject)" >&2
+  kubectl -n kube-system rollout status deployment/metrics-server --timeout=120s 2>/dev/null || true
+fi
 
 # kustomize 바이너리 없이도 동일하게 이미지 태그/레지스트리를 반영.
 # (kustomization.yaml 의 images/newTag 을 편집하는 대신, 실제 Deployment에 이미지 주입)

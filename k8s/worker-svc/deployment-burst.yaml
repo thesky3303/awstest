@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: worker-svc-burst
+  namespace: ticketing
   labels:
     app: worker-svc
     pool: burst

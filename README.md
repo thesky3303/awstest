@@ -170,7 +170,7 @@ terraform apply
   export DB_PASSWORD=
 
   bash ../k8s/scripts/apply-secrets-from-terraform.sh
-  kubectl apply -k ../k8s -n ${var.ticketing_namespace}
+  kubectl apply -k ../k8s
   bash ../k8s/scripts/sync-s3-endpoints-from-ingress.sh
   kubectl -n ${var.ticketing_namespace} patch cm ${var.ticketing_configmap_name} --type merge -p '{"data":{"DB_NAME":"ticketing"}}'
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name}
@@ -198,8 +198,8 @@ export DB_PASSWORD="tfvars에 넣었던 패스워드와 동일하게"
 bash ../k8s/scripts/apply-secrets-from-terraform.sh
 # 설명: Terraform output(DB/Redis 등)과 입력(DB_PASSWORD)을 읽어 `ticketing-secrets` Secret을 클러스터에 생성/갱신합니다.
 
-kubectl apply -k ../k8s (네임스페이스 필요하다면지정 ex) -n ticketing)
-# 설명: kustomize로 k8s 매니페스트를 한 번에 적용합니다(Deployment/Service/Ingress 등).
+kubectl apply -k ../k8s
+# 설명: 루트 kustomization에 ticketing과 kube-system(metrics-server PDB 등)이 함께 있으므로 -n 을 붙이지 않습니다.
 
 bash ../k8s/scripts/sync-s3-endpoints-from-ingress.sh
 # 설명: Ingress의 ALB hostname을 읽어 S3의 `api-origin.js`를 현재 ALB 주소로 동기화합니다.

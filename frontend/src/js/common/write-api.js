@@ -99,15 +99,30 @@ async function pollAsyncBookingStatus(statusPath, options) {
   const onProgress = options && typeof options.onProgress === 'function' ? options.onProgress : null;
   const deadline = Date.now() + timeoutSec * 1000;
   let last = {};
+  let errStreak = 0;
+  let curInterval = intervalMs;
   while (Date.now() < deadline) {
-    last = await writeApi(statusPath, 'GET', null, { cache: 'no-store' });
+    try {
+      last = await writeApi(statusPath, 'GET', null, { cache: 'no-store' });
+      errStreak = 0;
+      curInterval = intervalMs;
+    } catch (e) {
+      // 일시적인 네트워크/프록시 오류는 "예약은 서버에서 진행 중인데 UI만 실패"를 만들 수 있다.
+      // 여기서는 종료하지 말고 deadline까지 재시도한다.
+      errStreak += 1;
+      const base = Math.max(300, intervalMs);
+      const backoff = Math.min(2500, Math.floor(base * Math.pow(1.35, Math.min(10, errStreak))));
+      curInterval = backoff;
+      await new Promise((r) => setTimeout(r, curInterval));
+      continue;
+    }
     if (onProgress && last && last.status === 'PROCESSING') {
       try { onProgress(last); } catch (e) { /* ignore */ }
     }
     if (isTerminalAsyncBookingStatus(last)) {
       return last;
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await new Promise((r) => setTimeout(r, curInterval));
   }
   return {
     ok: false,

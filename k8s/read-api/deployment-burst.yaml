@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: read-api-burst
+  namespace: ticketing
   labels:
     app: read-api
     pool: burst

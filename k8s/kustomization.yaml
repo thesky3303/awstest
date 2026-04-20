@@ -1,7 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
-namespace: ticketing
+# 루트에 namespace 를 두면 kube-system PDB 등까지 ticketing 으로 덮어쓰므로, ticketing 리소스는 매니페스트에 namespace 명시.
 
 resources:
   - priorityclass-ticketing.yaml
@@ -20,6 +19,7 @@ resources:
   - worker-svc/deployment-burst.yaml
   - worker-svc/service.yaml
   - ingress.yaml
+  - kube-system
 
 images:
   - name: ticketing/ticketing-was
