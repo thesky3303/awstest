@@ -132,3 +132,35 @@ output "zzzzz" {
   .............................
   EOT
 }
+
+# ── 내 FINAL outputs 보존 (Cognito / API GW / CloudFront 모듈 참조) ─────────
+
+output "cloudfront_domain" {
+  value = module.cloudfront.cloudfront_domain
+}
+
+output "cognito_user_pool_id" {
+  value = module.cognito.user_pool_id
+}
+
+output "cognito_client_id" {
+  value = module.cognito.user_pool_client_id
+}
+
+output "cognito_user_pool_arn" {
+  value = module.cognito.user_pool_arn
+}
+
+output "cognito_domain" {
+  value = module.cognito.cognito_domain
+}
+
+output "api_gateway_endpoint" {
+  description = "API Gateway HTTP API invoke URL — CloudFront origin으로 사용됨"
+  value       = module.api_gateway.api_endpoint
+}
+
+output "api_gateway_endpoint_host" {
+  description = "API Gateway 도메인만 (https:// 제외)"
+  value       = module.api_gateway.api_endpoint_host
+}

@@ -32,6 +32,12 @@ provider "aws" {
   region = var.aws_region
 }
 
+# CloudFront용 WAF는 반드시 us-east-1에 생성해야 함 (module "waf" 전용)
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+}
+
 locals {
   db_schema_create_sql_path = abspath("${path.root}/../db-schema/create.sql")
   db_schema_insert_sql_path = abspath("${path.root}/../db-schema/Insert.sql")
@@ -125,11 +131,11 @@ module "eks" {
     module.sqs.reservation_queue_arn,
     module.sqs.reservation_dlq_arn,
   ]
-  app_node_instance_types      = var.eks_app_node_instance_types
-  app_node_desired_size        = var.eks_app_node_desired_size
-  app_node_min_size            = var.eks_app_node_min_size
-  app_node_max_size            = var.eks_app_node_max_size
-  depends_on                   = [module.network]
+  app_node_instance_types = var.eks_app_node_instance_types
+  app_node_desired_size   = var.eks_app_node_desired_size
+  app_node_min_size       = var.eks_app_node_min_size
+  app_node_max_size       = var.eks_app_node_max_size
+  depends_on              = [module.network]
 }
 
 module "s3_hosting_v2" {
@@ -192,4 +198,97 @@ resource "aws_iam_role_policy" "eks_node_sqs" {
       )
     }]
   })
+}
+
+# ── 내 FINAL 모듈들 보존 (Cognito / WAF / CloudFront / API Gateway / 전용 S3) ────────────
+# 형 main.tf 는 s3_hosting_v2(S3+CloudFront 단순본, WAF 미지원, enabled=false 기본)만 가짐.
+# 아래 5개 모듈은 프로덕션 경로(WAF + CloudFront + API GW + Cognito OAuth)를 구성한다.
+
+module "s3" {
+  source      = "./modules/s3"
+  env         = var.env
+  aws_account = data.aws_caller_identity.current.account_id
+}
+
+module "waf" {
+  source = "./modules/waf"
+  env    = var.env
+
+  providers = {
+    aws = aws.us_east_1
+  }
+}
+
+module "cognito" {
+  source                = "./modules/cognito"
+  env                   = var.env
+  app_name              = var.app_name
+  cognito_domain_prefix = var.cognito_domain_prefix
+  # root-level var 으로 순환 참조 차단 (module.cloudfront ↔ cognito 간 의존 해소)
+  cloudfront_domain = var.frontend_callback_domain
+}
+
+module "api_gateway" {
+  source     = "./modules/api_gateway"
+  env        = var.env
+  aws_region = var.aws_region
+
+  vpc_id                      = module.network.vpc_id
+  private_subnet_ids          = module.network.private_subnet_ids
+  cognito_user_pool_id        = module.cognito.user_pool_id
+  cognito_user_pool_client_id = module.cognito.user_pool_client_id
+  alb_listener_arn            = var.alb_listener_arn
+
+  depends_on = [module.network, module.cognito]
+}
+
+module "cloudfront" {
+  source                    = "./modules/cloudfront"
+  env                       = var.env
+  frontend_bucket_id        = module.s3.frontend_bucket_id
+  frontend_bucket_arn       = module.s3.frontend_bucket_arn
+  frontend_domain           = module.s3.frontend_bucket_regional_domain
+  waf_acl_arn               = module.waf.waf_acl_arn
+  api_gateway_endpoint_host = module.api_gateway.api_endpoint_host
+
+  # destroy 시 CloudFront 가 WAF 보다 먼저 삭제되도록 강제
+  # (WAF 가 먼저 삭제되면 CloudFront destroy 실패)
+  depends_on = [module.waf, module.api_gateway]
+}
+
+# ── ECR repositories ──────────────────────────────────────────────────
+# modules/cicd 에도 동일 정의가 있으나, GitHub OIDC/IAM 등 다른 리소스와 묶여 있어
+# 프로덕션 배포만 필요한 지금은 ECR 만 root 에 직접 선언. setup-all.sh [9/14] 의
+# `docker push` 가 이 repo 들에 이미지를 올린다.
+resource "aws_ecr_repository" "ticketing_was" {
+  name                 = "ticketing/ticketing-was"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+  tags = { Name = "ecr-ticketing-was", Environment = var.env }
+}
+
+resource "aws_ecr_repository" "worker_svc" {
+  name                 = "ticketing/worker-svc"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+  tags = { Name = "ecr-worker-svc", Environment = var.env }
+}
+
+resource "aws_ecr_repository" "frontend" {
+  name                 = "ticketing/frontend"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+  tags = { Name = "ecr-frontend", Environment = var.env }
 }

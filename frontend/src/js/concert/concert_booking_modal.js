@@ -133,12 +133,12 @@
   }
 
   function getStoredUserId() {
+    // Cognito 전환 후 user_id 는 UUID(sub) 문자열 → 숫자 정규식 검증 제거(c68c45c).
+    // 백엔드 Cognito 미들웨어가 x-cognito-sub 헤더를 resolve 해 DB int user_id 로 매핑.
     if (window.APP_RUNTIME && typeof window.APP_RUNTIME.getStoredUserId === 'function') {
-      const raw = String(window.APP_RUNTIME.getStoredUserId() || '').trim();
-      return /^\d+$/.test(raw) && Number(raw) > 0 ? raw : '';
+      return String(window.APP_RUNTIME.getStoredUserId() || '').trim();
     }
-    const raw = String(localStorage.getItem('user_id') || sessionStorage.getItem('user_id') || '').trim();
-    return /^\d+$/.test(raw) && Number(raw) > 0 ? raw : '';
+    return String(localStorage.getItem('user_id') || sessionStorage.getItem('user_id') || '').trim();
   }
 
   function createSeatKey(row, col) {

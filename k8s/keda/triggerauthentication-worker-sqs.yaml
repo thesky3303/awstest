@@ -1,9 +1,8 @@
-# SQS 메트릭 조회는 KEDA operator Pod 가 수행 → operator SA(keda:keda-operator)에 IRSA (terraform helm values).
-# KEDA 2.15+: identityOwner 는 keda | workload 만 허용 (구 operator → keda).
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
 metadata:
   name: keda-worker-sqs-aws
+  namespace: ticketing
   labels:
     app: worker-svc
 spec:

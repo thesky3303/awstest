@@ -25,9 +25,9 @@ resource "aws_subnet" "public" {
   # EKS(Pod IP) 소비가 커서 /24 두 개만으로는 burst 시 IP 고갈이 쉽게 발생함.
   # (aws-cni: failed to assign an IP address to container)
   # 따라서 public subnet을 4개로 늘려 IP pool을 확장한다.
-  count                   = 4
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.${count.index}.0/24"
+  count      = 4
+  vpc_id     = aws_vpc.main.id
+  cidr_block = "10.0.${count.index}.0/24"
   # IMPORTANT:
   # - EKS 클러스터는 생성 시점에 "서브넷이 속한 AZ의 집합"이 고정된다.
   # - 기존 클러스터가 2a/2b로 만들어졌다면, 이후 업데이트에서도 정확히 그 AZ 집합(2a/2b)만 허용된다.

@@ -1,6 +1,5 @@
 (function () {
   const LOGIN_CSS_PATH = '/css/user/login.css';
-  const LOGIN_API = '/api/read/auth/login';
   const runtime = window.APP_RUNTIME || {};
 
   let isLoginSubmitting = false;
@@ -45,69 +44,21 @@
     if (target) target.textContent = message || '';
   }
 
-  function normalizeResponse(data) {
-    if (!data || typeof data !== 'object') {
-      return {
-        success: false,
-        commonMessage: '로그인 처리 중 오류가 발생했습니다.'
-      };
+  /**
+   * Map Cognito error codes to user-friendly messages.
+   */
+  function cognitoErrorMessage(error) {
+    const code = error.code || '';
+    if (code.indexOf('NotAuthorizedException') !== -1) {
+      return '이메일 또는 비밀번호가 올바르지 않습니다.';
     }
-
-    if (data.message === 'login success' && data.user) {
-      return {
-        success: true,
-        user: data.user
-      };
+    if (code.indexOf('UserNotFoundException') !== -1) {
+      return '등록되지 않은 이메일입니다.';
     }
-
-    if (data.message === 'invalid input') {
-      return {
-        success: false,
-        fieldErrors: {
-          phone: '전화번호를 입력해 주세요.',
-          password: '비밀번호를 입력해 주세요.'
-        }
-      };
+    if (code.indexOf('UserNotConfirmedException') !== -1) {
+      return '이메일 인증이 완료되지 않았습니다.';
     }
-
-    if (data.message === '전화번호가 틀립니다.') {
-      return {
-        success: false,
-        fieldErrors: {
-          phone: '전화번호가 틀립니다.'
-        }
-      };
-    }
-
-    if (data.message === '비밀번호가 틀립니다.') {
-      return {
-        success: false,
-        fieldErrors: {
-          password: '비밀번호가 틀립니다.'
-        }
-      };
-    }
-
-    return {
-      success: false,
-      commonMessage: data.message || '서버와 통신 중 문제가 발생했습니다.'
-    };
-  }
-
-  async function requestLogin(phone, password) {
-    try {
-      const data = await runtime.postJson(LOGIN_API, { phone, password });
-      return normalizeResponse(data);
-    } catch (error) {
-      console.error('login fetch error:', error);
-      if (error && error.data) {
-        return normalizeResponse(error.data);
-      }
-      return {
-        success: false,
-        commonMessage: error.message || '서버와 통신 중 문제가 발생했습니다.'
-      };
-    }
+    return error.message || '로그인 처리 중 오류가 발생했습니다.';
   }
 
   async function openPwFindPage() {
@@ -160,7 +111,7 @@
 
     overlay.innerHTML = `
       <div class="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
-        <button type="button" class="login-modal-close" aria-label="닫기">×</button>
+        <button type="button" class="login-modal-close" aria-label="닫기">&times;</button>
 
         <div class="login-modal-header">
           <h2 id="login-modal-title" class="login-modal-title">LOGIN</h2>
@@ -170,16 +121,14 @@
         <form class="login-form" novalidate>
           <div class="login-form-group">
             <input
-              type="text"
-              name="phone"
+              type="email"
+              name="email"
               class="login-input"
-              placeholder="전화번호"
+              placeholder="이메일"
               autocomplete="username"
-              inputmode="numeric"
-              maxlength="11"
               value="${rememberedLoginId}"
             />
-            <div class="login-field-error" data-error-for="phone"></div>
+            <div class="login-field-error" data-error-for="email"></div>
           </div>
 
           <div class="login-form-group">
@@ -217,7 +166,7 @@
   function bindModalEvents(overlay) {
     const closeButton = overlay.querySelector('.login-modal-close');
     const form = overlay.querySelector('.login-form');
-    const phoneInput = overlay.querySelector('input[name="phone"]');
+    const emailInput = overlay.querySelector('input[name="email"]');
     const pwInput = overlay.querySelector('input[name="password"]');
     const rememberIdInput = overlay.querySelector('input[name="remember_id"]');
     const linkButtons = overlay.querySelectorAll('.login-link-button');
@@ -235,9 +184,8 @@
       }
     });
 
-    phoneInput.addEventListener('input', function () {
-      phoneInput.value = phoneInput.value.replace(/\D/g, '').slice(0, 11);
-      setFieldError(overlay, 'phone', '');
+    emailInput.addEventListener('input', function () {
+      setFieldError(overlay, 'email', '');
       setCommonError(overlay, '');
     });
 
@@ -265,13 +213,13 @@
 
       clearErrors(overlay);
 
-      const phone = phoneInput.value.trim();
+      const email = emailInput.value.trim();
       const password = pwInput.value;
       const rememberId = rememberIdInput.checked;
 
       let hasError = false;
-      if (!phone) {
-        setFieldError(overlay, 'phone', '전화번호를 입력해 주세요.');
+      if (!email) {
+        setFieldError(overlay, 'email', '이메일을 입력해 주세요.');
         hasError = true;
       }
       if (!password) {
@@ -285,27 +233,53 @@
       submitButton.textContent = '로그인 중...';
 
       try {
-        const result = await requestLogin(phone, password);
-        if (!result.success) {
-          if (result.fieldErrors?.phone) {
-            setFieldError(overlay, 'phone', result.fieldErrors.phone);
-          }
-          if (result.fieldErrors?.password) {
-            setFieldError(overlay, 'password', result.fieldErrors.password);
-          }
-          if (result.commonMessage) {
-            setCommonError(overlay, result.commonMessage);
-          }
+        // ── Cognito login ──
+        const cognitoResult = await window.CognitoAuth.login(email, password);
+        const authResult = cognitoResult.AuthenticationResult;
+
+        if (!authResult || !authResult.IdToken) {
+          setCommonError(overlay, '로그인에 실패했습니다.');
           return;
         }
 
+        // Decode ID token to extract user info
+        const userInfo = window.CognitoAuth.getCurrentUser();
+
         if (rememberId) {
-          runtime.saveRememberedLoginId(phone);
+          runtime.saveRememberedLoginId(email);
         } else {
           runtime.clearRememberedLoginId();
         }
 
-        runtime.setLoginUser(result.user);
+        // Set legacy loginUser for compatibility with mypage/edit/header
+        const userData = {
+          user_id: userInfo.sub,
+          name: userInfo.name || '',
+          email: userInfo.email || email,
+          phone: userInfo.phone || ''
+        };
+        runtime.setLoginUser(userData);
+        runtime.setStoredUserId(userInfo.sub);
+
+        // Cognito sub 은 UUID 문자열이라 백엔드(int) 와 타입이 안 맞음.
+        // /api/read/auth/me 로 DB int user_id 를 받아 localStorage 를 덮어써야
+        // 예매·대기열 같이 payload.user_id 만 보는 엔드포인트에서 400/500 이 안 남.
+        try {
+          const me = await runtime.getJson('/api/read/auth/me');
+          if (me && me.user && me.user.user_id) {
+            // user_id 뿐 아니라 name/email/phone 도 DB 기준으로 덮어써 localStorage 에 박아둠.
+            // - id_token refresh 시 name claim 이 빠지는 케이스 대비
+            // - 마이페이지 phone 수정 결과가 즉시 헤더/상태에 반영되도록
+            const patch = { user_id: me.user.user_id };
+            if (me.user.name)  patch.name  = me.user.name;
+            if (me.user.email) patch.email = me.user.email;
+            if (me.user.phone) patch.phone = me.user.phone;
+            runtime.patchLoginUser(patch);
+          }
+        } catch (meErr) {
+          console.warn('[login] resolve DB user_id failed:', meErr);
+        }
+
         closeLoginPage();
 
         if (typeof window.refreshSiteHeader === 'function') {
@@ -317,7 +291,7 @@
         }
       } catch (error) {
         console.error('login error:', error);
-        setCommonError(overlay, '서버와 통신 중 문제가 발생했습니다.');
+        setCommonError(overlay, cognitoErrorMessage(error));
       } finally {
         isLoginSubmitting = false;
         submitButton.disabled = false;
@@ -350,13 +324,17 @@
     document.body.appendChild(overlay);
     bindModalEvents(overlay);
 
-    const firstInput = overlay.querySelector('input[name="phone"]');
+    const firstInput = overlay.querySelector('input[name="email"]');
     if (firstInput) {
       requestAnimationFrame(() => firstInput.focus());
     }
   }
 
   function logoutUser() {
+    // Clear Cognito tokens + legacy login data
+    if (window.CognitoAuth) {
+      window.CognitoAuth.logout();
+    }
     if (typeof runtime.clearLoginUser === 'function') {
       runtime.clearLoginUser();
     }
@@ -382,6 +360,7 @@
     return runtime.getLoginUser ? runtime.getLoginUser() : null;
   };
   window.clearLoginUser = function () {
+    if (window.CognitoAuth) window.CognitoAuth.logout();
     if (runtime.clearLoginUser) {
       runtime.clearLoginUser();
     }

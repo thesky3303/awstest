@@ -77,6 +77,14 @@ def _refund_movie_booking(user_id: int, booking_id: int):
                 (booking_id,),
             )
 
+            # 영화 환불 시 schedules.remain_count 복원 (026322b) — 콘서트와 달리 worker-svc 가
+            # remain 을 역전파하는 async 루프가 없어 동기 UPDATE 가 필요.
+            if schedule_id > 0 and reg_count > 0:
+                cur.execute(
+                    "UPDATE schedules SET remain_count = remain_count + %s WHERE schedule_id = %s",
+                    (reg_count, schedule_id),
+                )
+
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -206,7 +214,7 @@ def _refund_concert_booking(user_id: int, booking_id: int):
     try:
         from concert.concert_read_cache import invalidate_concert_caches_after_booking
         from cache.redis_client import redis_client
-        from concert.seat_hold import remove_confirmed_seats
+        from concert.seat_hold import release_seats_on_refund, remove_confirmed_seats
 
         if concert_id_for_cache > 0:
             invalidate_concert_caches_after_booking(
@@ -215,11 +223,21 @@ def _refund_concert_booking(user_id: int, booking_id: int):
             )
 
         # Redis 정합성 보정(best-effort):
-        # - confirmed set에서 환불 좌석 제거(중복좌석 방지)
+        # - confirmed set에서 환불 좌석 제거(중복좌석 1차 가드)
+        # - seat 키(concert:seat:*)와 hold set도 정리(any_confirmed 0차 가드의 "CONFIRMED" 문자열 잔재 제거, 7433228)
         # - remain 단일 카운터를 DB 값으로 동기화(잔여 복구)
         if show_id_for_cache > 0:
             if refunded_seat_keys:
                 remove_confirmed_seats(show_id=int(show_id_for_cache), seat_keys=refunded_seat_keys)
+                seats_tuples: list[tuple[int, int]] = []
+                for k in refunded_seat_keys:
+                    try:
+                        r_str, c_str = str(k).split("-", 1)
+                        seats_tuples.append((int(r_str), int(c_str)))
+                    except Exception:
+                        continue
+                if seats_tuples:
+                    release_seats_on_refund(show_id=int(show_id_for_cache), seats=seats_tuples)
             if remain_after_db is not None:
                 redis_client.set(f"concert:show:{int(show_id_for_cache)}:remain:v1", int(remain_after_db))
     except Exception:

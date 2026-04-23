@@ -1,7 +1,14 @@
+"""
+사용자 조회 API (Cognito 전환 후).
+
+- 비밀번호 관련 엔드포인트(find-password, check-phone) 제거.
+- mypage는 cognito_sub 기반 컬럼 사용.
+- 예매 내역 조회는 query param user_id 유지 (미들웨어가 인증 보장).
+"""
 from math import ceil
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from db import get_db_connection, get_db_read_connection
@@ -28,64 +35,26 @@ def _derive_region_name(address):
 
 
 @router.get("/api/read/user/mypage")
-def get_mypage(user_id: Optional[str] = Query(default=None)):
+def get_mypage(request: Request):
+    """미들웨어가 부착한 user_id로 프로필 조회."""
+    user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        return JSONResponse(status_code=400, content={"message": "invalid input"})
-    try:
-        user_id_int = int(user_id)
-    except (TypeError, ValueError):
-        return JSONResponse(status_code=400, content={"message": "invalid input"})
+        return JSONResponse(status_code=401, content={"message": "인증이 필요합니다."})
+    user_id_int = int(user_id)
     conn = get_db_read_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT user_id, phone, name FROM users WHERE user_id = %s", (user_id_int,))
+            cur.execute(
+                "SELECT user_id, email, name, phone, created_at FROM users WHERE user_id = %s",
+                (user_id_int,),
+            )
             user = cur.fetchone()
         if not user:
             return JSONResponse(status_code=404, content={"message": "user not found"})
+        # JSON 직렬화용: datetime → ISO, NULL → '' (프론트는 '-' fallback 이 있으나 일관성 유지)
+        if user.get("created_at") is not None:
+            user["created_at"] = user["created_at"].isoformat()
         return user
-    finally:
-        conn.close()
-
-
-@router.post("/api/read/user/check-phone")
-def check_phone_duplicate(payload: Optional[Dict[str, Any]] = Body(default=None)):
-    data = payload or {}
-    phone = (data.get("phone") or "").strip()
-    if not phone:
-        return JSONResponse(status_code=400, content={"message": "invalid input"})
-    conn = get_db_read_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS count FROM users WHERE phone = %s", (phone,))
-            row = cur.fetchone()
-        count = int(row["count"] or 0)
-        return {"message": "ok", "duplicated": count > 0, "count": count}
-    finally:
-        conn.close()
-
-
-@router.post("/api/read/user/find-password")
-def find_password_user(payload: Optional[Dict[str, Any]] = Body(default=None)):
-    data = payload or {}
-    phone = (data.get("phone") or "").strip()
-    name = (data.get("name") or "").strip()
-    if not phone or not name:
-        return JSONResponse(status_code=400, content={"message": "invalid input"})
-    conn = get_db_read_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT user_id, phone, name FROM users WHERE phone = %s", (phone,))
-            user_by_phone = cur.fetchone()
-            cur.execute("SELECT user_id, phone, name FROM users WHERE name = %s", (name,))
-            user_by_name = cur.fetchone()
-            cur.execute("SELECT user_id, phone, name FROM users WHERE phone = %s AND name = %s", (phone, name))
-            matched_user = cur.fetchone()
-        if matched_user:
-            return {
-                "message": "found", "success": True, "matched_phone": True, "matched_name": True,
-                "user": {"user_id": matched_user["user_id"], "phone": matched_user["phone"], "name": matched_user["name"]},
-            }
-        return {"message": "not matched", "success": False, "matched_phone": user_by_phone is not None, "matched_name": user_by_name is not None}
     finally:
         conn.close()
 

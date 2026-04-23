@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cors_ensure_middleware import EnsureCrossOriginCredentialsMiddleware
 from auth.auth_user_read import router as auth_user_read_router
+from auth.cognito_middleware import CognitoAuthMiddleware
 from concert.concert_read import router as concert_read_router
 from concert.concert_read_cache import warmup_concert_caches
 from movie.movie_cache_builder import rebuild_movie_cache
@@ -201,6 +202,8 @@ app.add_middleware(
 )
 # CORSMiddleware가 붙이지 못하는 오류 응답에도 ACAO 보장 (브라우저 CORS 메시지 왜곡 방지)
 app.add_middleware(EnsureCrossOriginCredentialsMiddleware)
+# Cognito 인증 미들웨어: x-cognito-sub 헤더 → DB user_id 매핑
+app.add_middleware(CognitoAuthMiddleware)
 
 for router in READ_ROUTERS:
     app.include_router(router)

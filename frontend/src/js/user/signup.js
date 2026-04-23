@@ -1,8 +1,6 @@
 (function () {
   const LOGIN_CSS_PATH = '/css/user/login.css';
   const SIGNUP_CSS_PATH = '/css/user/signup.css';
-  const CHECK_PHONE_API = '/api/read/auth/check-phone';
-  const SIGNUP_API = '/api/write/auth/signup';
   const runtime = window.APP_RUNTIME || {};
 
   function ensureModalCss() {
@@ -48,16 +46,12 @@
     setCommonError(modal, '');
   }
 
-  function onlyDigits(value) {
-    return String(value || '').replace(/\D/g, '');
-  }
-
   function sanitizeName(value) {
     return String(value || '').replace(/[^가-힣a-zA-Z\s]/g, '');
   }
 
-  function isValidPhone(phone) {
-    return /^01[016789]\d{7,8}$/.test(String(phone || '').trim());
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
   }
 
   function isValidName(name) {
@@ -65,43 +59,24 @@
   }
 
   function isValidPassword(password) {
-    return String(password || '').trim().length >= 4;
+    return String(password || '').trim().length >= 8;
   }
 
-  async function requestPhoneDuplicate(phone) {
-    try {
-      const result = await runtime.postJson(CHECK_PHONE_API, { phone });
-      const duplicated =
-        result.duplicated === true ||
-        result.duplicate === true ||
-        result.exists === true ||
-        result.found === true ||
-        Number(result.count || 0) > 0;
-
-      return {
-        success: result.success !== false,
-        duplicated,
-        message: result.message || ''
-      };
-    } catch (error) {
-      return {
-        success: false,
-        duplicated: false,
-        message: error.message || '서버에 연결할 수 없습니다.'
-      };
+  /**
+   * Map Cognito error codes to user-friendly messages.
+   */
+  function cognitoSignupErrorMessage(error) {
+    const code = error.code || '';
+    if (code.indexOf('UsernameExistsException') !== -1) {
+      return '이미 등록된 이메일입니다.';
     }
-  }
-
-  async function requestSignup(phone, password, name) {
-    try {
-      return await runtime.postJson(SIGNUP_API, { phone, password, name });
-    } catch (error) {
-      return {
-        success: false,
-        status: error.status,
-        message: error.message || '서버 오류가 발생했습니다.'
-      };
+    if (code.indexOf('InvalidPasswordException') !== -1) {
+      return '비밀번호 형식이 올바르지 않습니다. (8자 이상, 대소문자/숫자/특수문자 포함)';
     }
+    if (code.indexOf('InvalidParameterException') !== -1) {
+      return '입력 정보를 확인해 주세요.';
+    }
+    return error.message || '회원가입에 실패했습니다.';
   }
 
   function buildSignupHtml() {
@@ -111,7 +86,7 @@
 
     overlay.innerHTML = `
       <div class="login-modal signup-modal" role="dialog" aria-modal="true" aria-labelledby="signup-modal-title">
-        <button type="button" class="login-modal-close" aria-label="닫기">×</button>
+        <button type="button" class="login-modal-close" aria-label="닫기">&times;</button>
 
         <div class="login-modal-header signup-header">
           <h2 id="signup-modal-title" class="login-modal-title">회원가입</h2>
@@ -120,12 +95,12 @@
 
         <form class="signup-form" novalidate>
           <div class="signup-form-group">
-            <input type="text" name="phone" class="login-input signup-input" placeholder="핸드폰번호" inputmode="numeric" maxlength="11" />
-            <div class="signup-field-error" data-error-for="phone"></div>
+            <input type="email" name="email" class="login-input signup-input" placeholder="이메일" autocomplete="email" />
+            <div class="signup-field-error" data-error-for="email"></div>
           </div>
 
           <div class="signup-form-group">
-            <input type="password" name="password" class="login-input signup-input" placeholder="비밀번호" autocomplete="new-password" />
+            <input type="password" name="password" class="login-input signup-input" placeholder="비밀번호 (8자 이상)" autocomplete="new-password" />
             <div class="signup-field-error" data-error-for="password"></div>
           </div>
 
@@ -151,27 +126,12 @@
     const closeButton = overlay.querySelector('.login-modal-close');
     const cancelButton = overlay.querySelector('.signup-cancel-button');
     const form = overlay.querySelector('.signup-form');
-    const phoneInput = form.querySelector('input[name="phone"]');
+    const emailInput = form.querySelector('input[name="email"]');
     const passwordInput = form.querySelector('input[name="password"]');
     const nameInput = form.querySelector('input[name="name"]');
     const submitButton = form.querySelector('.signup-submit-button');
     let isComposingName = false;
     let isSubmitting = false;
-
-    async function validatePhoneDuplicate() {
-      const phone = phoneInput.value.trim();
-      if (!phone) return '핸드폰번호를 입력하세요.';
-      if (!isValidPhone(phone)) return '핸드폰번호를 확인하세요.';
-
-      const result = await requestPhoneDuplicate(phone);
-      if (!result.success) {
-        return result.message || '서버와 통신할 수 없습니다.';
-      }
-      if (result.duplicated) {
-        return '이미 사용 중인 핸드폰번호입니다.';
-      }
-      return '';
-    }
 
     overlay.addEventListener('click', function (event) {
       if (event.target === overlay) {
@@ -182,8 +142,7 @@
     closeButton.addEventListener('click', closeSignupPage);
     cancelButton.addEventListener('click', goToLoginPage);
 
-    phoneInput.addEventListener('input', function () {
-      phoneInput.value = onlyDigits(phoneInput.value).slice(0, 11);
+    emailInput.addEventListener('input', function () {
       clearErrors(overlay);
     });
 
@@ -213,17 +172,17 @@
 
       clearErrors(overlay);
 
-      const phone = phoneInput.value.trim();
+      const email = emailInput.value.trim();
       const password = passwordInput.value;
       const name = nameInput.value.trim();
 
       let hasError = false;
-      if (!isValidPhone(phone)) {
-        setFieldError(overlay, 'phone', '핸드폰번호를 확인하세요.');
+      if (!isValidEmail(email)) {
+        setFieldError(overlay, 'email', '올바른 이메일을 입력해 주세요.');
         hasError = true;
       }
       if (!isValidPassword(password)) {
-        setFieldError(overlay, 'password', '비밀번호는 4자 이상 입력하세요.');
+        setFieldError(overlay, 'password', '비밀번호는 8자 이상 입력하세요.');
         hasError = true;
       }
       if (!isValidName(name)) {
@@ -232,25 +191,57 @@
       }
       if (hasError) return;
 
-      const phoneError = await validatePhoneDuplicate();
-      if (phoneError) {
-        setFieldError(overlay, 'phone', phoneError);
-        return;
-      }
-
       isSubmitting = true;
       submitButton.disabled = true;
       submitButton.textContent = '가입 중...';
 
       try {
-        const result = await requestSignup(phone, password, name);
-        if (result.success === false) {
-          setCommonError(overlay, result.message || '회원가입에 실패했습니다.');
-          return;
+        // ── Cognito signup (Lambda auto-confirm, no verification step) ──
+        await window.CognitoAuth.signUp(email, password, name);
+
+        // Auto-login after signup
+        try {
+          const loginResult = await window.CognitoAuth.login(email, password);
+          const authResult = loginResult.AuthenticationResult;
+          if (authResult && authResult.IdToken) {
+            const userInfo = window.CognitoAuth.getCurrentUser();
+            const userData = {
+              user_id: userInfo.sub,
+              name: userInfo.name || name,
+              email: userInfo.email || email,
+              phone: userInfo.phone || ''
+            };
+            runtime.setLoginUser(userData);
+            runtime.setStoredUserId(userInfo.sub);
+
+            // Cognito sub(UUID) → DB int user_id 치환 + DB name/email/phone 동기화
+            // (login.js 와 동일 이유: id_token refresh 후 name claim 이 빠져도 localStorage 유지)
+            try {
+              const me = await runtime.getJson('/api/read/auth/me');
+              if (me && me.user && me.user.user_id) {
+                const patch = { user_id: me.user.user_id };
+                if (me.user.name)  patch.name  = me.user.name;
+                if (me.user.email) patch.email = me.user.email;
+                if (me.user.phone) patch.phone = me.user.phone;
+                runtime.patchLoginUser(patch);
+              }
+            } catch (meErr) {
+              console.warn('[signup] resolve DB user_id failed:', meErr);
+            }
+          }
+        } catch (loginErr) {
+          console.warn('[signup] auto-login after signup failed:', loginErr);
         }
 
         alert('회원가입이 완료되었습니다.');
-        goToLoginPage();
+        closeSignupPage();
+
+        if (typeof window.refreshSiteHeader === 'function') {
+          await window.refreshSiteHeader();
+        }
+      } catch (error) {
+        console.error('[signup] error:', error);
+        setCommonError(overlay, cognitoSignupErrorMessage(error));
       } finally {
         isSubmitting = false;
         submitButton.disabled = false;
@@ -275,7 +266,7 @@
     document.body.appendChild(overlay);
     bindEvents(overlay);
 
-    const firstInput = overlay.querySelector('input[name="phone"]');
+    const firstInput = overlay.querySelector('input[name="email"]');
     if (firstInput) {
       requestAnimationFrame(() => firstInput.focus());
     }

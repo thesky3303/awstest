@@ -82,21 +82,51 @@ fi
 echo "=== cluster-autoscaler (Helm, 노드 ASG — Pending 파드 시 스케일아웃) ==="
 bash "$REPO_ROOT/scripts/install-cluster-autoscaler.sh"
 
-if command -v terraform >/dev/null 2>&1; then
+# parent apply 가 state lock 중이면 nested `terraform output` 이 Windows 에서 실패.
+# 이 정보는 부가 로그용이라 스킵해도 무방. 직접 실행 시에는 원래대로 출력.
+if [ -z "${AWS_ACCOUNT_ID:-}" ] && command -v terraform >/dev/null 2>&1; then
   echo "=== eks_node_group_scaling_summary (max > desired 여야 CA scale-up 가능) ==="
   terraform -chdir="$TF_DIR" output eks_node_group_scaling_summary 2>/dev/null || true
 fi
 
 export DB_PASSWORD
+# apply-secrets 이 Secret 을 ns=ticketing 에 만들므로 네임스페이스 선생성 필수.
+# (kustomize 의 namespace.yaml 은 "kubectl apply -k" 에서 만들어지므로 더 뒤에 생성됨.)
+echo "=== ensure namespace $NS ==="
+kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS" >/dev/null
+
 echo "=== apply-secrets-from-terraform ==="
 NAMESPACE="$NS" bash "$REPO_ROOT/k8s/scripts/apply-secrets-from-terraform.sh"
 
-echo "=== kubectl apply -k (rendered) ==="
-kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS" >/dev/null
+# sqs-access-sa 는 ArgoCD/Kustomize 관리 밖(k8s/_runtime/)으로 분리.
+# 배포자마다 AWS 계정 ID 가 달라 IRSA role arn 도 다르므로 git 단일진실원으로
+# 두면 selfHeal 이 live annotation 을 덮어 IRSA 가 영구 파손된다(과거 이슈).
+# 여기서 parent apply 가 주입한 AWS_ACCOUNT_ID + SQS_ACCESS_ROLE_ARN 으로 직접 적용.
+echo "=== apply sqs-access-sa (IRSA annotation 주입) ==="
+_sa_role_arn="${SQS_ACCESS_ROLE_ARN:-}"
+if [ -z "$_sa_role_arn" ] && [ -n "${AWS_ACCOUNT_ID:-}" ]; then
+  _sa_role_arn="arn:aws:eks:${AWS_REGION:-ap-northeast-2}:${AWS_ACCOUNT_ID}:role/ticketing-eks-sqs-access-role"
+fi
+if [ -z "$_sa_role_arn" ]; then
+  echo "ERROR: SQS_ACCESS_ROLE_ARN 미주입 — IRSA SA 생성 불가" >&2
+  exit 1
+fi
+kubectl -n "$NS" apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sqs-access-sa
+  namespace: $NS
+  annotations:
+    eks.amazonaws.com/role-arn: "$_sa_role_arn"
+EOF
 
-ACCOUNT_ID="$(terraform -chdir="$TF_DIR" output -raw aws_account_id 2>/dev/null)"
-REGION="$(terraform -chdir="$TF_DIR" output -raw aws_region 2>/dev/null)"
-SQS_ROLE_ARN="$(terraform -chdir="$TF_DIR" output -raw sqs_access_role_arn 2>/dev/null)"
+echo "=== kubectl apply -k (rendered) ==="
+
+# parent apply 가 주입한 env 우선 (Windows state lock 회피). 없으면 terraform output fallback.
+ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(terraform -chdir="$TF_DIR" output -raw aws_account_id 2>/dev/null)}"
+REGION="${AWS_REGION:-$(terraform -chdir="$TF_DIR" output -raw aws_region 2>/dev/null)}"
+SQS_ROLE_ARN="${SQS_ACCESS_ROLE_ARN:-$(terraform -chdir="$TF_DIR" output -raw sqs_access_role_arn 2>/dev/null)}"
 ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 WAS_IMAGE="${ECR_REGISTRY}/${ECR_REPO_TICKETING_WAS}:${IMAGE_TAG}"
 WORKER_IMAGE="${ECR_REGISTRY}/${ECR_REPO_WORKER_SVC}:${IMAGE_TAG}"

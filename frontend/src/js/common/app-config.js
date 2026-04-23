@@ -187,17 +187,29 @@
   function getLoginUser() {
     const key = runtime.constants.loginStorageKey;
     const parsed = readStorageJson(key);
-    if (!parsed || typeof parsed !== 'object') {
+    if (parsed && typeof parsed === 'object') {
+      if (!parsed.expiresAt || Date.now() <= Number(parsed.expiresAt)) {
+        return parsed;
+      }
       localStorage.removeItem(key);
-      return null;
+    } else if (parsed !== null) {
+      localStorage.removeItem(key);
     }
 
-    if (parsed.expiresAt && Date.now() > Number(parsed.expiresAt)) {
-      localStorage.removeItem(key);
-      return null;
+    // Fallback: check Cognito token
+    if (window.CognitoAuth && window.CognitoAuth.isLoggedIn()) {
+      const cogUser = window.CognitoAuth.getCurrentUser();
+      if (cogUser) {
+        return {
+          user_id: cogUser.sub,
+          name: cogUser.name,
+          email: cogUser.email,
+          phone: cogUser.phone
+        };
+      }
     }
 
-    return parsed;
+    return null;
   }
 
   function setStoredUserId(userId) {
@@ -212,6 +224,12 @@
     const loginUser = getLoginUser();
     if (loginUser && loginUser.user_id) {
       return String(loginUser.user_id);
+    }
+
+    // Fallback: Cognito sub
+    if (window.CognitoAuth && window.CognitoAuth.isLoggedIn()) {
+      const cogUser = window.CognitoAuth.getCurrentUser();
+      if (cogUser && cogUser.sub) return cogUser.sub;
     }
 
     return '';
@@ -248,6 +266,10 @@
     localStorage.removeItem(runtime.constants.loginStorageKey);
     localStorage.removeItem('user_id');
     sessionStorage.removeItem('user_id');
+    // Also clear Cognito tokens
+    if (window.CognitoAuth && typeof window.CognitoAuth.clearTokens === 'function') {
+      window.CognitoAuth.clearTokens();
+    }
   }
 
   function getRememberedLoginId() {
@@ -452,10 +474,6 @@
 
   async function requestJson(url, options) {
     const opts = options || {};
-    const path = String(url || '');
-    if (path.startsWith('/api/')) {
-      await ensureTicketingEndpointsLoaded();
-    }
     const resolvedPath = resolveTicketingApiUrl(url);
     const method = String(opts.method || 'GET').toUpperCase();
     const headers = { ...(opts.headers || {}) };
@@ -487,7 +505,7 @@
         : new URL(resolvedPath, window.location.origin).toString();
     const fetchOptions = {
       method,
-      credentials: opts.credentials || 'include',
+      credentials: opts.credentials || 'omit',
       cache: opts.cache || 'default',
       headers
     };
@@ -513,6 +531,23 @@
     }
 
     if (!response.ok) {
+      // 401 → attempt Cognito token refresh and retry once
+      if (response.status === 401 && !noAuth && !opts.__retried && window.CognitoAuth) {
+        try {
+          await window.CognitoAuth.refreshToken();
+          return requestJson(url, { ...opts, __retried: true });
+        } catch (refreshErr) {
+          // refresh failed → clear session, redirect to login
+          if (window.CognitoAuth) window.CognitoAuth.clearTokens();
+          if (typeof runtime.clearLoginUser === 'function') runtime.clearLoginUser();
+          if (typeof window.openLoginPage === 'function') window.openLoginPage();
+          const expired = new Error('인증이 만료되었습니다. 다시 로그인해 주세요.');
+          expired.status = 401;
+          expired.data = data;
+          throw expired;
+        }
+      }
+
       const message = data && typeof data === 'object' && data.message
         ? data.message
         : `HTTP ${response.status}`;
@@ -575,4 +610,24 @@
   }
 
   runtime.notifyReadCacheRebuilt = notifyReadCacheRebuilt;
+
+  /**
+   * Cognito 세션이 살아있는데 localStorage.user_id 가 int 가 아니면
+   * (= 옛 버전에서 저장된 Cognito sub UUID) /api/read/auth/me 로 DB int user_id 를
+   * 받아와 덮어씀. 예매·대기열 payload.user_id 가 항상 int 가 되도록 보장.
+   */
+  async function healStaleUserId() {
+    try {
+      if (!window.CognitoAuth || !window.CognitoAuth.isLoggedIn()) return;
+      const stored = (localStorage.getItem('user_id') || '').trim();
+      if (stored && /^\d+$/.test(stored)) return;
+      const me = await getJson('/api/read/auth/me');
+      if (me && me.user && me.user.user_id) {
+        setStoredUserId(me.user.user_id);
+        const current = getLoginUser() || {};
+        setLoginUser({ ...current, user_id: me.user.user_id }, { preserveExpires: true });
+      }
+    } catch (e) { /* 네트워크/401 → 다음 로그인 시 치유 */ }
+  }
+  setTimeout(healStaleUserId, 0);
 })();

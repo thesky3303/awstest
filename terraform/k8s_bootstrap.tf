@@ -36,23 +36,32 @@ resource "null_resource" "k8s_bootstrap_after_apply" {
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
     environment = {
-      REPO_ROOT   = abspath("${path.root}/..")
-      DB_PASSWORD = var.db_password
+      REPO_ROOT = abspath("${path.root}/..")
+      # NOTE: DB_PASSWORD 는 env 블록에 넣지 않는다. sensitive=true var 하나라도 environment 에 있으면
+      # Terraform 이 provisioner 의 stdout/stderr 를 전부 "output suppressed" 로 가려서
+      # 디버깅이 불가능해진다. setup-all.sh 가 `export DB_PASSWORD=...` 로 부모 shell 에
+      # 등록하면 `terraform apply` 의 자식 프로세스(bash)가 그대로 상속받는다.
       # 같은 apply 중 nested `terraform output`은 state 락·sensitive 출력 때문에 실패할 수 있음 → 모듈 값 직접 전달
       POST_APPLY_RDS_WRITER_ENDPOINT    = nonsensitive(module.rds.writer_endpoint)
       POST_APPLY_REDIS_PRIMARY_ENDPOINT = nonsensitive(module.elasticache.redis_endpoint)
+      POST_APPLY_SQS_QUEUE_URL          = module.sqs.reservation_queue_url
       EKS_CLUSTER_NAME                  = module.eks.cluster_name
       AWS_REGION                        = var.aws_region
-      TICKETING_NAMESPACE               = var.ticketing_namespace
-      TICKETING_CONFIGMAP_NAME          = var.ticketing_configmap_name
-      WORKER_DEPLOYMENT_NAME            = var.worker_deployment_name
-      READ_API_DEPLOYMENT_NAME          = var.read_api_deployment_name
-      WRITE_API_DEPLOYMENT_NAME         = var.write_api_deployment_name
-      K8S_INGRESS_NAME                  = var.k8s_ingress_name
-      IMAGE_TAG                         = var.image_tag
-      ECR_REPO_TICKETING_WAS            = var.ecr_repo_ticketing_was
-      ECR_REPO_WORKER_SVC               = var.ecr_repo_worker_svc
-      DB_SCHEMA_NAME                    = var.db_schema_name
+      # Windows strict state lock 회피: install-cluster-autoscaler / post_apply 가
+      # nested `terraform output` 으로 읽던 값을 부모 apply 에서 직접 주입.
+      AWS_ACCOUNT_ID              = data.aws_caller_identity.current.account_id
+      SQS_ACCESS_ROLE_ARN         = module.eks.sqs_access_role_arn
+      CLUSTER_AUTOSCALER_ROLE_ARN = module.eks.cluster_autoscaler_role_arn
+      TICKETING_NAMESPACE         = var.ticketing_namespace
+      TICKETING_CONFIGMAP_NAME    = var.ticketing_configmap_name
+      WORKER_DEPLOYMENT_NAME      = var.worker_deployment_name
+      READ_API_DEPLOYMENT_NAME    = var.read_api_deployment_name
+      WRITE_API_DEPLOYMENT_NAME   = var.write_api_deployment_name
+      K8S_INGRESS_NAME            = var.k8s_ingress_name
+      IMAGE_TAG                   = var.image_tag
+      ECR_REPO_TICKETING_WAS      = var.ecr_repo_ticketing_was
+      ECR_REPO_WORKER_SVC         = var.ecr_repo_worker_svc
+      DB_SCHEMA_NAME              = var.db_schema_name
       SYNC_S3_ENDPOINTS = (
         var.enable_s3_hosting_v2_module && !var.enable_cloudfront_for_frontend
       ) ? "1" : "0"

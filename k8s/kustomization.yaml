@@ -3,9 +3,13 @@ kind: Kustomization
 # 루트에 namespace 를 두면 kube-system PDB 등까지 ticketing 으로 덮어쓰므로, ticketing 리소스는 매니페스트에 namespace 명시.
 
 resources:
+  - namespace.yaml
   - priorityclass-ticketing.yaml
   - configmap.yaml
-  - sqs-service-account.yaml
+  # sqs-service-account 는 ArgoCD 관리 밖(k8s/_runtime/) 으로 분리.
+  # IRSA role arn 이 배포자마다 다르기 때문에 kustomize/ArgoCD 로 git 을 단일진실원으로
+  # 두면 selfHeal/sync 가 live annotation 을 덮어 IRSA 가 파손되는 문제를 구조적으로 차단.
+  # 대신 terraform/scripts/post_apply_k8s_bootstrap.sh 가 env 치환 후 kubectl apply.
   - pdb-user-facing.yaml
   - read-api/deployment.yaml
   - read-api/deployment-burst.yaml
@@ -19,12 +23,14 @@ resources:
   - worker-svc/deployment-burst.yaml
   - worker-svc/service.yaml
   - ingress.yaml
+  - keda
   - kube-system
 
 images:
   - name: ticketing/ticketing-was
-    newName: 538118265080.dkr.ecr.ap-northeast-2.amazonaws.com/ticketing/ticketing-was
+    # setup-all.sh [9.5/14] 가 734772058616 를 본인 AWS 계정 ID 로 치환 후 git push.
+    newName: 734772058616.dkr.ecr.ap-northeast-2.amazonaws.com/ticketing/ticketing-was
     newTag: latest
   - name: ticketing/worker-svc
-    newName: 538118265080.dkr.ecr.ap-northeast-2.amazonaws.com/ticketing/worker-svc
+    newName: 734772058616.dkr.ecr.ap-northeast-2.amazonaws.com/ticketing/worker-svc
     newTag: latest

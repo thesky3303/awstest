@@ -11,9 +11,8 @@ function resolveWriteTarget(path) {
 
 async function writeApi(path, method = 'POST', data = null, options = {}) {
   const runtime = window.APP_RUNTIME;
-  if (runtime && typeof runtime.ensureTicketingEndpointsLoaded === 'function') {
-    await runtime.ensureTicketingEndpointsLoaded();
-  }
+  // ensureTicketingEndpointsLoaded 호출 제거 (e9129d3) — S3 웹호스팅 모드에서 endpoints
+  // 동적 로드 체인이 CORS preflight 와 충돌해 401 유발. 엔드포인트는 APP_RUNTIME 초기화 시 1회만 해결.
   const targetPath = resolveWriteTarget(path);
 
   if (runtime && typeof runtime.requestJson === 'function') {
@@ -39,7 +38,9 @@ async function writeApi(path, method = 'POST', data = null, options = {}) {
 
   const fetchOptions = {
     method,
-    credentials: 'include',
+    // Cognito id_token 은 Authorization 헤더로 이미 전달. credentials:include 는
+    // API GW CORS preflight 가 credentials 허용 origin 매칭에 실패해 401 유발.
+    credentials: 'omit',
     headers
   };
 

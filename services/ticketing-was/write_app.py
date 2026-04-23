@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cors_ensure_middleware import EnsureCrossOriginCredentialsMiddleware
 from auth.auth_user_write import router as auth_user_write_router
+from auth.cognito_middleware import CognitoAuthMiddleware
 from concert.concert_write import router as concert_write_router
 from cache.cache_builder import router as cache_builder_router
 from theater.theaters_write import router as theaters_write_router
@@ -82,6 +83,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(EnsureCrossOriginCredentialsMiddleware)
+# Cognito 인증 미들웨어: x-cognito-sub 헤더 → DB user_id 매핑
+app.add_middleware(CognitoAuthMiddleware)
 
 for router in WRITE_ROUTERS:
     app.include_router(router)

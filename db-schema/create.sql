@@ -19,9 +19,12 @@ SET default_storage_engine = INNODB;
 
 CREATE TABLE IF NOT EXISTS users (
   user_id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  phone VARCHAR(20) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
-  name VARCHAR(50) NOT NULL,
+  phone VARCHAR(20) NULL,
+  email VARCHAR(255) NULL,
+  cognito_sub VARCHAR(255) UNIQUE,
+  -- Cognito 전환 후 실로그인에는 미사용. 형 Insert.sql 더미 유저 시딩 호환을 위해 컬럼만 유지.
+  password_hash VARCHAR(255) NULL,
+  name VARCHAR(50) NOT NULL DEFAULT '',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
