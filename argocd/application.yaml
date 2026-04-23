@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/sxk34/soldesk.git
+    repoURL: https://github.com/thesky3303/awstest.git
     targetRevision: FINAL
     path: k8s
   destination:
