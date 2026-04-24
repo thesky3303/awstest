@@ -1,0 +1,99 @@
+== ts ==
+2026-04-24T20:35:31+09:00
+cwd=/mnt/hgfs/vm-share/teamproject/terraform
+
+== tools-once ==
+NAME         READY   STATUS    RESTARTS   AGE   IP             NODE                                            NOMINATED NODE   READINESS GATES
+tools-once   1/1     Running   0          18m   100.64.52.82   ip-10-0-0-134.ap-northeast-2.compute.internal   <none>           <none>
+
+Traceback (most recent call last):
+  File "aws.py", line 19, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "awscli/clidriver.py", line 52, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "awscli/autoprompt/core.py", line 17, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "awscli/autoprompt/prompttoolkit.py", line 18, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/__init__.py", line 27, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/application/__init__.py", line 3, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/application/application.py", line 36, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/buffer.py", line 26, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/completion/__init__.py", line 3, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/completion/base.py", line 11, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/formatted_text/__init__.py", line 16, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/formatted_text/ansi.py", line 6, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/output/__init__.py", line 3, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/output/base.py", line 12, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/styles/__init__.py", line 15, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/styles/defaults.py", line 11, in <module>
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1342, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 938, in _load_unlocked
+  File "pyimod02_importers.py", line 457, in exec_module
+  File "prompt_toolkit/styles/style.py", line 177, in <module>
+  File "re/__init__.py", line 289, in compile
+  File "re/__init__.py", line 350, in _compile
+  File "re/_compiler.py", line 766, in compile
+  File "re/_compiler.py", line 599, in _code
+  File "re/_compiler.py", line 116, in _compile
+  File "re/_compiler.py", line 88, in _compile
+  File "re/_compiler.py", line 269, in _optimize_charset
+KeyboardInterrupt
+[PYI-300769:ERROR] Failed to execute script 'aws' due to unhandled exception!
