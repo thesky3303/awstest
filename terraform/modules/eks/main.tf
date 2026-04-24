@@ -198,10 +198,11 @@ resource "null_resource" "pod_eni_configs" {
   }
 
   # vpc-cni 애드온 이후: ENIConfig CRD 가 존재해야 apply 가능.
-  # 노드그룹 이후: 노드가 존재해야 ipamd 가 실제로 ENIConfig 를 적용하기 시작.
+  # 노드그룹 **이전**에 apply 해야 함: CUSTOM_NETWORK_CFG=true 일 때 ENIConfig 가 없으면
+  # 신규 노드가 Ready 되지 못해 NodeCreationFailure / Unhealthy nodes 로 노드그룹이 실패한다.
+  # (AWS 권장: ENIConfig 를 워커 기동 전에 생성.)
   depends_on = [
     aws_eks_addon.vpc_cni,
-    aws_eks_node_group.app,
   ]
 
   provisioner "local-exec" {
@@ -245,6 +246,7 @@ resource "aws_eks_node_group" "app" {
     aws_iam_role_policy_attachment.eks_node_cni,
     aws_iam_role_policy_attachment.eks_node_ecr,
     aws_eks_addon.vpc_cni,
+    null_resource.pod_eni_configs,
     null_resource.cleanup_vpc_leftovers_post,
   ]
 
