@@ -12,6 +12,8 @@ resource "null_resource" "cleanup_k8s_resources" {
   depends_on = [
     aws_eks_cluster.main,
     aws_eks_node_group.app,
+    aws_eks_node_group.burst_primary,
+    aws_eks_node_group.burst_secondary,
   ]
 
   provisioner "local-exec" {
@@ -269,6 +271,108 @@ resource "aws_eks_node_group" "app" {
   )
 }
 
+# Burst 전용 노드그룹 — AZ 를 통제하기 위해 subnet_ids 를 1개 AZ 로 제한한다.
+# 일반 워크로드(read-api 등)는 app 노드에 두고, burst(write/worker burst)만 여기로 몰아 cross-AZ 비용을 줄인다.
+resource "aws_eks_node_group" "burst_primary" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "${local.name_prefix}-burst-primary-nodes"
+  node_role_arn   = aws_iam_role.eks_node.arn
+  subnet_ids      = var.burst_primary_subnet_ids
+  instance_types  = var.app_node_instance_types
+  ami_type        = "AL2023_x86_64_STANDARD"
+
+  scaling_config {
+    desired_size = var.burst_primary_desired_size
+    min_size     = var.burst_primary_min_size
+    max_size     = var.burst_primary_max_size
+  }
+
+  update_config { max_unavailable = 1 }
+
+  labels = {
+    role         = "burst"
+    workload     = "ticketing-burst"
+    burst_zone   = "primary"
+    eks_nodepool = "burst-primary"
+  }
+
+  taint {
+    key    = "workload"
+    value  = "ticketing-burst"
+    effect = "NO_SCHEDULE"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_node_worker,
+    aws_iam_role_policy_attachment.eks_node_cni,
+    aws_iam_role_policy_attachment.eks_node_ecr,
+    aws_eks_addon.vpc_cni,
+    null_resource.pod_eni_configs,
+    null_resource.cleanup_vpc_leftovers_post,
+  ]
+
+  tags = merge(
+    {
+      Name        = "${local.name_prefix}-burst-primary-nodes"
+      Environment = var.env
+    },
+    {
+      "k8s.io/cluster-autoscaler/enabled"             = "true"
+      "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
+    }
+  )
+}
+
+resource "aws_eks_node_group" "burst_secondary" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "${local.name_prefix}-burst-secondary-nodes"
+  node_role_arn   = aws_iam_role.eks_node.arn
+  subnet_ids      = var.burst_secondary_subnet_ids
+  instance_types  = var.app_node_instance_types
+  ami_type        = "AL2023_x86_64_STANDARD"
+
+  scaling_config {
+    desired_size = var.burst_secondary_desired_size
+    min_size     = var.burst_secondary_min_size
+    max_size     = var.burst_secondary_max_size
+  }
+
+  update_config { max_unavailable = 1 }
+
+  labels = {
+    role         = "burst"
+    workload     = "ticketing-burst"
+    burst_zone   = "secondary"
+    eks_nodepool = "burst-secondary"
+  }
+
+  taint {
+    key    = "workload"
+    value  = "ticketing-burst"
+    effect = "NO_SCHEDULE"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_node_worker,
+    aws_iam_role_policy_attachment.eks_node_cni,
+    aws_iam_role_policy_attachment.eks_node_ecr,
+    aws_eks_addon.vpc_cni,
+    null_resource.pod_eni_configs,
+    null_resource.cleanup_vpc_leftovers_post,
+  ]
+
+  tags = merge(
+    {
+      Name        = "${local.name_prefix}-burst-secondary-nodes"
+      Environment = var.env
+    },
+    {
+      "k8s.io/cluster-autoscaler/enabled"             = "true"
+      "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
+    }
+  )
+}
+
 # HPA(Resource)가 cpu/memory utilization 을 받으려면 metrics.k8s.io API 가 필요 — EKS 관리 애드온으로 고정
 data "aws_eks_addon_version" "metrics_server" {
   addon_name         = "metrics-server"
@@ -349,6 +453,8 @@ resource "aws_eks_addon" "ebs_csi" {
 
   depends_on = [
     aws_eks_node_group.app,
+    aws_eks_node_group.burst_primary,
+    aws_eks_node_group.burst_secondary,
     aws_iam_role_policy_attachment.ebs_csi,
   ]
 }

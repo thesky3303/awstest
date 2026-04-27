@@ -64,3 +64,44 @@ variable "app_node_max_size" {
   type        = number
   description = "피크 시 상한. Cluster Autoscaler + HPA(read-api 등)와 함께 쓸 것."
 }
+
+# Burst 전용 노드그룹(티켓팅 이벤트 전용). subnet_ids 는 AZ 를 통제하기 위해 보통 1개 AZ subnet 만 넣는다.
+variable "burst_primary_subnet_ids" {
+  type        = list(string)
+  description = "Burst primary managed node group subnets (typically 1 AZ)."
+}
+
+variable "burst_secondary_subnet_ids" {
+  type        = list(string)
+  description = "Burst secondary managed node group subnets (typically 1 AZ)."
+}
+
+variable "burst_primary_desired_size" {
+  type        = number
+  description = "Burst primary node group desired size (평시 0 권장)."
+}
+
+variable "burst_primary_min_size" {
+  type        = number
+  description = "Burst primary node group min size."
+}
+
+variable "burst_primary_max_size" {
+  type        = number
+  description = "Burst primary node group max size (ASG 상한)."
+}
+
+variable "burst_secondary_desired_size" {
+  type        = number
+  description = "Burst secondary node group desired size (평시 0 권장)."
+}
+
+variable "burst_secondary_min_size" {
+  type        = number
+  description = "Burst secondary node group min size."
+}
+
+variable "burst_secondary_max_size" {
+  type        = number
+  description = "Burst secondary node group max size (ASG 상한)."
+}

@@ -1,46 +1,66 @@
-# HPA 대상. stable(write-api) 1대는 ticketing-priority-write-api-stable(선점), 추가분만 여기(선점 없음).
+# HPA 대상(Secondary burst lane). 예비 AZ에 소량 배치(기본 0).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: write-api-burst
+  name: write-api-burst-secondary
   namespace: ticketing
   labels:
     app: write-api
     pool: burst
+    burst-zone: secondary
 spec:
-  # Resource metric(HPA)는 0→1 scale-up을 못 함(파드 메트릭이 없어서). 1개는 항상 떠 있게 둔다.
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: write-api
       pool: burst
+      burst-zone: secondary
   template:
     metadata:
       labels:
         app: write-api
         pool: burst
+        burst-zone: secondary
     spec:
       enableServiceLinks: false
       priorityClassName: ticketing-priority-write-api-burst
       serviceAccountName: sqs-access-sa
+      nodeSelector:
+        workload: ticketing-burst
+        burst-zone: secondary
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: ticketing-burst
+          effect: NoSchedule
       topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: ScheduleAnyway
-          labelSelector:
-            matchLabels:
-              app: write-api
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
               app: write-api
+              pool: burst
+              burst-zone: secondary
       containers:
         - name: write-api
           image: ticketing/ticketing-was:latest
           imagePullPolicy: Always
-          command: ["uvicorn", "write_app:app", "--host", "0.0.0.0", "--port", "5001"]
+          command:
+            [
+              "uvicorn",
+              "write_app:app",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "5001",
+              "--workers",
+              "2",
+              "--backlog",
+              "8192",
+              "--timeout-keep-alive",
+              "5",
+            ]
           ports:
             - containerPort: 5001
           envFrom:
@@ -53,30 +73,31 @@ spec:
               value: "64"
           resources:
             requests:
-              memory: "256Mi"
-              cpu: "150m"
-            limits:
               memory: "768Mi"
               cpu: "1000m"
+            limits:
+              memory: "1536Mi"
+              cpu: "2000m"
           startupProbe:
             httpGet:
               path: /api/write/health
               port: 5001
             periodSeconds: 5
-            failureThreshold: 60
+            timeoutSeconds: 10
+            failureThreshold: 180
           livenessProbe:
             httpGet:
               path: /api/write/health
               port: 5001
             initialDelaySeconds: 10
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 5
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 10
           readinessProbe:
             httpGet:
               path: /api/write/health
               port: 5001
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 6
+            timeoutSeconds: 15
+            failureThreshold: 30

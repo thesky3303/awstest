@@ -32,6 +32,16 @@ output "eks_app_node_group_name" {
   description = "App EKS managed node group (read/write nodes)."
 }
 
+output "eks_burst_primary_node_group_name" {
+  value       = module.eks.burst_primary_node_group_name
+  description = "Burst-primary EKS managed node group (ticketing burst lane)."
+}
+
+output "eks_burst_secondary_node_group_name" {
+  value       = module.eks.burst_secondary_node_group_name
+  description = "Burst-secondary EKS managed node group (ticketing burst lane)."
+}
+
 output "eks_node_role_arn" {
   description = "IAM role ARN used by EKS worker nodes (for aws-auth mapRoles)."
   value       = module.eks.node_role_arn
@@ -126,9 +136,9 @@ output "zzzzz" {
   kubectl apply -k ../k8s
   bash ../k8s/scripts/sync-s3-endpoints-from-ingress.sh
   kubectl -n ${var.ticketing_namespace} patch cm ${var.ticketing_configmap_name} --type merge -p '{"data":{"DB_NAME":"ticketing"}}'
-  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name} deploy/${var.worker_deployment_name}-burst || true
+  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.worker_deployment_name} deploy/${var.worker_deployment_name}-burst-primary deploy/${var.worker_deployment_name}-burst-secondary || true
   kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.read_api_deployment_name} deploy/${var.read_api_deployment_name}-burst || true
-  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.write_api_deployment_name} deploy/${var.write_api_deployment_name}-burst || true
+  kubectl -n ${var.ticketing_namespace} rollout restart deploy/${var.write_api_deployment_name} deploy/${var.write_api_deployment_name}-burst-primary deploy/${var.write_api_deployment_name}-burst-secondary || true
   .............................
   EOT
 }

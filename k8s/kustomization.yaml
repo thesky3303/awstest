@@ -16,11 +16,14 @@ resources:
   - read-api/service.yaml
   - read-api/hpa.yaml
   - write-api/deployment.yaml
-  - write-api/deployment-burst.yaml
+  - write-api/deployment-burst-primary.yaml
+  - write-api/deployment-burst-secondary.yaml
   - write-api/service.yaml
-  - write-api/hpa.yaml
+  - write-api/hpa-primary.yaml
+  - write-api/hpa-secondary.yaml
   - worker-svc/deployment.yaml
-  - worker-svc/deployment-burst.yaml
+  - worker-svc/deployment-burst-primary.yaml
+  - worker-svc/deployment-burst-secondary.yaml
   - worker-svc/service.yaml
   - ingress.yaml
   - backup/cronjob.yaml

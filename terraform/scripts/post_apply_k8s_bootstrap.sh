@@ -173,9 +173,11 @@ fi
 kubectl -n "$NS" set image deploy/"$READ_API" "read-api=${WAS_IMAGE}" >/dev/null
 kubectl -n "$NS" set image deploy/"${READ_API}-burst" "read-api=${WAS_IMAGE}" >/dev/null 2>&1 || true
 kubectl -n "$NS" set image deploy/"$WRITE_API" "write-api=${WAS_IMAGE}" >/dev/null
-kubectl -n "$NS" set image deploy/"${WRITE_API}-burst" "write-api=${WAS_IMAGE}" >/dev/null 2>&1 || true
+kubectl -n "$NS" set image deploy/"${WRITE_API}-burst-primary" "write-api=${WAS_IMAGE}" >/dev/null 2>&1 || true
+kubectl -n "$NS" set image deploy/"${WRITE_API}-burst-secondary" "write-api=${WAS_IMAGE}" >/dev/null 2>&1 || true
 kubectl -n "$NS" set image deploy/"$WORKER" "worker-svc=${WORKER_IMAGE}" >/dev/null
-kubectl -n "$NS" set image deploy/"${WORKER}-burst" "worker-svc=${WORKER_IMAGE}" >/dev/null 2>&1 || true
+kubectl -n "$NS" set image deploy/"${WORKER}-burst-primary" "worker-svc=${WORKER_IMAGE}" >/dev/null 2>&1 || true
+kubectl -n "$NS" set image deploy/"${WORKER}-burst-secondary" "worker-svc=${WORKER_IMAGE}" >/dev/null 2>&1 || true
 
 kubectl -n "$NS" annotate sa sqs-access-sa "eks.amazonaws.com/role-arn=${SQS_ROLE_ARN}" --overwrite >/dev/null 2>&1 || true
 if [ -n "${_db_backup_role_arn:-}" ]; then
@@ -211,10 +213,12 @@ echo "=== patch configmap + rollouts ==="
 kubectl -n "$NS" patch cm "$CM" --type merge -p "{\"data\":{\"DB_NAME\":\"${DB_SCHEMA_NAME}\"}}" || true
 kubectl -n "$NS" patch cm "$CM" --type merge -p "{\"data\":{\"AWS_REGION\":\"$AWS_REGION\"}}" || true
 kubectl -n "$NS" rollout restart deploy/"$WORKER" || true
-kubectl -n "$NS" rollout restart deploy/"${WORKER}-burst" || true
+kubectl -n "$NS" rollout restart deploy/"${WORKER}-burst-primary" || true
+kubectl -n "$NS" rollout restart deploy/"${WORKER}-burst-secondary" || true
 kubectl -n "$NS" rollout restart deploy/"$READ_API" || true
 kubectl -n "$NS" rollout restart deploy/"${READ_API}-burst" || true
 kubectl -n "$NS" rollout restart deploy/"$WRITE_API" || true
-kubectl -n "$NS" rollout restart deploy/"${WRITE_API}-burst" || true
+kubectl -n "$NS" rollout restart deploy/"${WRITE_API}-burst-primary" || true
+kubectl -n "$NS" rollout restart deploy/"${WRITE_API}-burst-secondary" || true
 
 echo "=== post_apply_k8s_bootstrap done ==="

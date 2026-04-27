@@ -8,8 +8,9 @@ set -o pipefail 2>/dev/null || true
 #
 # 적용 값:
 #   - 노드 그룹: minSize = desiredSize = -n,  maxSize = max(-n + 5, AWS에 현재 설정된 maxSize)  (5는 NODE_MAX_DELTA)
-#   - write/read HPA(burst): minReplicas = -wr / -r,  maxReplicas = 그 min + 20  (20은 POD_MAX_DELTA)
-#   - worker KEDA: minReplicaCount = -wk,  maxReplicaCount = -wk + 20,  paused 해제
+#   - write HPA(burst): 총 -wr 를 primary/secondary 로 80:20 분할해 각 HPA min/max 반영
+#   - read HPA(burst): minReplicas = -r, maxReplicas = min + 20
+#   - worker KEDA: 총 -wk 를 primary/secondary 로 80:20 분할해 각 ScaledObject min/max 반영 + paused 해제
 #
 # 버퍼 오버라이드: SET_TEST_CAP_POD_MAX_DELTA (기본 20), SET_TEST_CAP_NODE_MAX_DELTA (기본 5)
 
@@ -50,20 +51,21 @@ _strip_legacy_annotations() {
   )
   local k
   for k in "${keys[@]}"; do
-    kubectl -n "$NS" annotate hpa/write-api-hpa "${k}-" --overwrite >/dev/null 2>&1 || true
+    kubectl -n "$NS" annotate hpa/write-api-burst-primary-hpa "${k}-" --overwrite >/dev/null 2>&1 || true
+    kubectl -n "$NS" annotate hpa/write-api-burst-secondary-hpa "${k}-" --overwrite >/dev/null 2>&1 || true
     kubectl -n "$NS" annotate hpa/read-api-hpa "${k}-" --overwrite >/dev/null 2>&1 || true
-    kubectl -n "$NS" annotate scaledobject/worker-svc-sqs "${k}-" --overwrite >/dev/null 2>&1 || true
+    kubectl -n "$NS" annotate scaledobject/worker-svc-sqs-primary "${k}-" --overwrite >/dev/null 2>&1 || true
+    kubectl -n "$NS" annotate scaledobject/worker-svc-sqs-secondary "${k}-" --overwrite >/dev/null 2>&1 || true
   done
 }
 
 _set_hpa() {
   local name="$1" rep="$2" obj="hpa/$1"
-  # 이 클러스터는 Resource metric(HPA)로 scale-to-zero(min=0)를 허용하지 않는다.
-  # 최소 유지 모드(rep<=0)에서는 HPA 자체가 1로 되살리는 것을 막기 위해 HPA를 삭제하고,
-  # burst Deployment를 0으로 내려 Pending → 노드 증가 트리거를 제거한다.
+  # read-api burst HPA는 minReplicas=1 기반이라, rep<=0(최소 유지)에서는 HPA를 삭제해
+  # "다시 1로 되살아나며 burst를 띄우는" 동작을 막는다.
+  # burst Deployment는 0으로 내려 Pending → 노드 증가 트리거를 제거한다.
   if (( rep <= 0 )); then
     case "$name" in
-      write-api-hpa) kubectl -n "$NS" scale deploy/write-api-burst --replicas=0 >/dev/null 2>&1 || true ;;
       read-api-hpa)  kubectl -n "$NS" scale deploy/read-api-burst  --replicas=0 >/dev/null 2>&1 || true ;;
     esac
     kubectl -n "$NS" delete "$obj" --ignore-not-found >/dev/null 2>&1 || true
@@ -75,20 +77,59 @@ _set_hpa() {
   kubectl -n "$NS" patch "$obj" --type merge -p "{\"spec\":{\"minReplicas\":${rep},\"maxReplicas\":${new_max}}}" >/dev/null
 }
 
+_set_hpa_write_split() {
+  # write burst 는 primary/secondary 로 분리되어 있으므로, 총 rep 를 80:20 으로 나눠 각 HPA에 반영한다.
+  local rep="$1"
+  if (( rep <= 0 )); then
+    kubectl -n "$NS" scale deploy/write-api-burst-primary --replicas=0 >/dev/null 2>&1 || true
+    kubectl -n "$NS" scale deploy/write-api-burst-secondary --replicas=0 >/dev/null 2>&1 || true
+    kubectl -n "$NS" delete hpa/write-api-burst-primary-hpa --ignore-not-found >/dev/null 2>&1 || true
+    kubectl -n "$NS" delete hpa/write-api-burst-secondary-hpa --ignore-not-found >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  local pri=$(( (rep * 8 + 9) / 10 )) # ceil(rep*0.8)
+  local sec=$(( rep - pri ))
+  if (( sec < 0 )); then sec=0; fi
+
+  local max_pri=$((pri + POD_MAX_DELTA))
+  local max_sec=$((sec + POD_MAX_DELTA))
+  if (( max_pri < pri )); then max_pri="$pri"; fi
+  if (( max_sec < sec )); then max_sec="$sec"; fi
+
+  kubectl -n "$NS" patch hpa/write-api-burst-primary-hpa --type merge -p "{\"spec\":{\"minReplicas\":${pri},\"maxReplicas\":${max_pri}}}" >/dev/null
+  kubectl -n "$NS" patch hpa/write-api-burst-secondary-hpa --type merge -p "{\"spec\":{\"minReplicas\":${sec},\"maxReplicas\":${max_sec}}}" >/dev/null
+}
+
 _set_keda() {
   local rep="$1"
-  local obj="scaledobject/worker-svc-sqs"
-  local new_max=$((rep + POD_MAX_DELTA))
-  if (( new_max < rep )); then new_max="$rep"; fi
-  kubectl -n "$NS" patch "$obj" --type merge -p "{\"spec\":{\"minReplicaCount\":${rep},\"maxReplicaCount\":${new_max}}}" >/dev/null
-  # rep=0은 "클러스터 최소 유지" 모드에서 사용됨:
-  # - 큐에 메시지가 남아있으면 KEDA가 즉시 scale-out 하며 Pending → 노드 증가로 이어질 수 있다.
-  # - 따라서 rep=0일 때는 paused를 유지/설정해서 burst가 자동으로 다시 올라오지 않게 한다.
   if (( rep <= 0 )); then
-    kubectl -n "$NS" annotate "$obj" autoscaling.keda.sh/paused="true" --overwrite >/dev/null 2>&1 || true
-  else
-    kubectl -n "$NS" annotate "$obj" autoscaling.keda.sh/paused- >/dev/null 2>&1 || true
+    # rep=0은 "클러스터 최소 유지" 모드에서 사용됨:
+    # - 큐에 메시지가 남아있으면 KEDA가 즉시 scale-out 하며 Pending → 노드 증가로 이어질 수 있다.
+    # - 따라서 rep=0일 때는 paused를 유지/설정해서 burst가 자동으로 다시 올라오지 않게 한다.
+    kubectl -n "$NS" scale deploy/worker-svc-burst-primary --replicas=0 >/dev/null 2>&1 || true
+    kubectl -n "$NS" scale deploy/worker-svc-burst-secondary --replicas=0 >/dev/null 2>&1 || true
+    # maxReplicaCount=0 는 KEDA/CRD에서 거절될 수 있어, min만 0으로 두고 max는 매니페스트 값을 유지한다.
+    kubectl -n "$NS" patch scaledobject/worker-svc-sqs-primary --type merge -p "{\"spec\":{\"minReplicaCount\":0}}" >/dev/null 2>&1 || true
+    kubectl -n "$NS" patch scaledobject/worker-svc-sqs-secondary --type merge -p "{\"spec\":{\"minReplicaCount\":0}}" >/dev/null 2>&1 || true
+    kubectl -n "$NS" annotate scaledobject/worker-svc-sqs-primary autoscaling.keda.sh/paused="true" --overwrite >/dev/null 2>&1 || true
+    kubectl -n "$NS" annotate scaledobject/worker-svc-sqs-secondary autoscaling.keda.sh/paused="true" --overwrite >/dev/null 2>&1 || true
+    return 0
   fi
+
+  local pri=$(( (rep * 8 + 9) / 10 )) # ceil(rep*0.8)
+  local sec=$(( rep - pri ))
+  if (( sec < 0 )); then sec=0; fi
+
+  local max_pri=$((pri + POD_MAX_DELTA))
+  local max_sec=$((sec + POD_MAX_DELTA))
+  if (( max_pri < pri )); then max_pri="$pri"; fi
+  if (( max_sec < sec )); then max_sec="$sec"; fi
+
+  kubectl -n "$NS" patch scaledobject/worker-svc-sqs-primary --type merge -p "{\"spec\":{\"minReplicaCount\":${pri},\"maxReplicaCount\":${max_pri}}}" >/dev/null
+  kubectl -n "$NS" patch scaledobject/worker-svc-sqs-secondary --type merge -p "{\"spec\":{\"minReplicaCount\":${sec},\"maxReplicaCount\":${max_sec}}}" >/dev/null
+  kubectl -n "$NS" annotate scaledobject/worker-svc-sqs-primary autoscaling.keda.sh/paused- >/dev/null 2>&1 || true
+  kubectl -n "$NS" annotate scaledobject/worker-svc-sqs-secondary autoscaling.keda.sh/paused- >/dev/null 2>&1 || true
 }
 
 _set_nodegroup() {
@@ -107,12 +148,12 @@ _set_nodegroup() {
   if [[ "${FORCE_NODE_MAX:-0}" = "1" ]]; then
     new_max="$desired"
   else
-  cand=$((desired + NODE_MAX_DELTA))
-  new_max="$cand"
-  if [[ -n "${pmax:-}" && "$pmax" =~ ^[0-9]+$ ]] && (( pmax > new_max )); then
-    new_max="$pmax"
-  fi
-  if (( new_max < desired )); then new_max="$desired"; fi
+    cand=$((desired + NODE_MAX_DELTA))
+    new_max="$cand"
+    if [[ -n "${pmax:-}" && "$pmax" =~ ^[0-9]+$ ]] && (( pmax > new_max )); then
+      new_max="$pmax"
+    fi
+    if (( new_max < desired )); then new_max="$desired"; fi
   fi
 
   aws eks update-nodegroup-config \
@@ -121,6 +162,49 @@ _set_nodegroup() {
     --nodegroup-name "$ng" \
     --scaling-config "minSize=${desired},desiredSize=${desired},maxSize=${new_max}" \
     >/dev/null
+
+  # burst nodegroups (optional outputs): 80/20 로 desired 분배 (평시 0으로 내리는 것도 가능)
+  local ngp ngs dp ds pmaxp pmaxs new_maxp new_maxs candp cands
+  ngp="$(_tf_out eks_burst_primary_node_group_name)"
+  ngs="$(_tf_out eks_burst_secondary_node_group_name)"
+  if [[ -n "$ngp" && -n "$ngs" ]]; then
+    dp=$(( (desired * 8 + 9) / 10 )) # ceil(desired*0.8)
+    ds=$(( desired - dp ))
+    if (( ds < 0 )); then ds=0; fi
+
+    jp="$(aws eks describe-nodegroup --region "$region" --cluster-name "$cluster" --nodegroup-name "$ngp" 2>/dev/null || true)"
+    js="$(aws eks describe-nodegroup --region "$region" --cluster-name "$cluster" --nodegroup-name "$ngs" 2>/dev/null || true)"
+    pmaxp="$(printf "%s" "$jp" | python -c 'import json,sys; j=json.load(sys.stdin); sc=j.get("nodegroup",{}).get("scalingConfig",{}) or {}; print(sc.get("maxSize",""))' 2>/dev/null || true)"
+    pmaxs="$(printf "%s" "$js" | python -c 'import json,sys; j=json.load(sys.stdin); sc=j.get("nodegroup",{}).get("scalingConfig",{}) or {}; print(sc.get("maxSize",""))' 2>/dev/null || true)"
+
+    candp=$((dp + NODE_MAX_DELTA))
+    cands=$((ds + NODE_MAX_DELTA))
+    new_maxp="$candp"
+    new_maxs="$cands"
+    if [[ "${FORCE_NODE_MAX:-0}" = "1" ]]; then
+      new_maxp="$dp"
+      new_maxs="$ds"
+    else
+      if [[ -n "${pmaxp:-}" && "$pmaxp" =~ ^[0-9]+$ ]] && (( pmaxp > new_maxp )); then new_maxp="$pmaxp"; fi
+      if [[ -n "${pmaxs:-}" && "$pmaxs" =~ ^[0-9]+$ ]] && (( pmaxs > new_maxs )); then new_maxs="$pmaxs"; fi
+      if (( new_maxp < dp )); then new_maxp="$dp"; fi
+      if (( new_maxs < ds )); then new_maxs="$ds"; fi
+    fi
+
+    aws eks update-nodegroup-config \
+      --region "$region" \
+      --cluster-name "$cluster" \
+      --nodegroup-name "$ngp" \
+      --scaling-config "minSize=${dp},desiredSize=${dp},maxSize=${new_maxp}" \
+      >/dev/null || true
+
+    aws eks update-nodegroup-config \
+      --region "$region" \
+      --cluster-name "$cluster" \
+      --nodegroup-name "$ngs" \
+      --scaling-config "minSize=${ds},desiredSize=${ds},maxSize=${new_maxs}" \
+      >/dev/null || true
+  fi
 }
 
 _force_scale_targets_now() {
@@ -129,9 +213,25 @@ _force_scale_targets_now() {
   # - write/read: HPA 대상 burst Deployment
   # - worker: KEDA 대상 burst Deployment
   local wr="$1" rd="$2" wk="$3"
-  kubectl -n "$NS" scale deploy/write-api-burst --replicas="$wr" >/dev/null 2>&1 || true
+  if (( wr > 0 )); then
+    local wr_pri=$(( (wr * 8 + 9) / 10 ))
+    local wr_sec=$(( wr - wr_pri ))
+    kubectl -n "$NS" scale deploy/write-api-burst-primary --replicas="$wr_pri" >/dev/null 2>&1 || true
+    kubectl -n "$NS" scale deploy/write-api-burst-secondary --replicas="$wr_sec" >/dev/null 2>&1 || true
+  else
+    kubectl -n "$NS" scale deploy/write-api-burst-primary --replicas=0 >/dev/null 2>&1 || true
+    kubectl -n "$NS" scale deploy/write-api-burst-secondary --replicas=0 >/dev/null 2>&1 || true
+  fi
   kubectl -n "$NS" scale deploy/read-api-burst --replicas="$rd" >/dev/null 2>&1 || true
-  kubectl -n "$NS" scale deploy/worker-svc-burst --replicas="$wk" >/dev/null 2>&1 || true
+  if (( wk > 0 )); then
+    local wk_pri=$(( (wk * 8 + 9) / 10 ))
+    local wk_sec=$(( wk - wk_pri ))
+    kubectl -n "$NS" scale deploy/worker-svc-burst-primary --replicas="$wk_pri" >/dev/null 2>&1 || true
+    kubectl -n "$NS" scale deploy/worker-svc-burst-secondary --replicas="$wk_sec" >/dev/null 2>&1 || true
+  else
+    kubectl -n "$NS" scale deploy/worker-svc-burst-primary --replicas=0 >/dev/null 2>&1 || true
+    kubectl -n "$NS" scale deploy/worker-svc-burst-secondary --replicas=0 >/dev/null 2>&1 || true
+  fi
 }
 
 _need kubectl
@@ -154,7 +254,7 @@ done
 
 _strip_legacy_annotations
 
-_set_hpa "write-api-hpa" "$wr"
+_set_hpa_write_split "$wr"
 _set_hpa "read-api-hpa" "$rd"
 _set_keda "$wk"
 _set_nodegroup "$nodes"

@@ -1,17 +1,16 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: write-api-hpa
+  name: write-api-burst-primary-hpa
   namespace: ticketing
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: write-api-burst
-  # stable write-api 1대는 HPA 밖. burst 만 1~23.
-  # 이 클러스터는 Resource metric(HPA)로 scale-to-zero(min=0)를 허용하지 않음.
-  minReplicas: 1
-  maxReplicas: 23
+    name: write-api-burst-primary
+  # 평시 0으로 두고, 이벤트 전 웜업으로 replicas 를 올리는 운영을 기본으로 한다.
+  minReplicas: 0
+  maxReplicas: 60
   metrics:
     - type: Resource
       resource:

@@ -233,7 +233,13 @@ def _k8s_snapshot_counts(namespace: str) -> dict:
             ((it or {}).get("metadata") or {}).get("name"): it
             for it in (j_deploys.get("items") or [])
         }
-        for name in ("write-api-burst", "read-api-burst", "worker-svc-burst"):
+        for name in (
+            "write-api-burst-primary",
+            "write-api-burst-secondary",
+            "read-api-burst",
+            "worker-svc-burst-primary",
+            "worker-svc-burst-secondary",
+        ):
             it = by_name.get(name) or {}
             st = (it.get("status") or {}) if isinstance(it, dict) else {}
             rr = st.get("readyReplicas")
@@ -241,15 +247,28 @@ def _k8s_snapshot_counts(namespace: str) -> dict:
             deploys_ready[name] = int(rr) if isinstance(rr, int) else 0
             deploys_desired[name] = int(dr) if isinstance(dr, int) else 0
 
+    wr_ready = (deploys_ready.get("write-api-burst-primary") or 0) + (deploys_ready.get("write-api-burst-secondary") or 0)
+    wr_des = (deploys_desired.get("write-api-burst-primary") or 0) + (deploys_desired.get("write-api-burst-secondary") or 0)
+    wk_ready = (deploys_ready.get("worker-svc-burst-primary") or 0) + (deploys_ready.get("worker-svc-burst-secondary") or 0)
+    wk_des = (deploys_desired.get("worker-svc-burst-primary") or 0) + (deploys_desired.get("worker-svc-burst-secondary") or 0)
+
     return {
         "namespace": ns,
         "eks_nodes_ready": nodes_ready,
-        "write_burst_pods_ready": deploys_ready.get("write-api-burst"),
+        "write_burst_pods_ready": wr_ready,
         "read_burst_pods_ready": deploys_ready.get("read-api-burst"),
-        "work_burst_pods_ready": deploys_ready.get("worker-svc-burst"),
-        "write_burst_pods_desired": deploys_desired.get("write-api-burst"),
+        "work_burst_pods_ready": wk_ready,
+        "write_burst_pods_desired": wr_des,
         "read_burst_pods_desired": deploys_desired.get("read-api-burst"),
-        "work_burst_pods_desired": deploys_desired.get("worker-svc-burst"),
+        "work_burst_pods_desired": wk_des,
+        "write_burst_primary_pods_ready": deploys_ready.get("write-api-burst-primary"),
+        "write_burst_secondary_pods_ready": deploys_ready.get("write-api-burst-secondary"),
+        "write_burst_primary_pods_desired": deploys_desired.get("write-api-burst-primary"),
+        "write_burst_secondary_pods_desired": deploys_desired.get("write-api-burst-secondary"),
+        "work_burst_primary_pods_ready": deploys_ready.get("worker-svc-burst-primary"),
+        "work_burst_secondary_pods_ready": deploys_ready.get("worker-svc-burst-secondary"),
+        "work_burst_primary_pods_desired": deploys_desired.get("worker-svc-burst-primary"),
+        "work_burst_secondary_pods_desired": deploys_desired.get("worker-svc-burst-secondary"),
         "kubectl_nodes_error": _short_kubectl_err(nodes_err),
         "kubectl_deploys_error": _short_kubectl_err(deploys_err),
     }
