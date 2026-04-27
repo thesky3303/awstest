@@ -77,7 +77,7 @@ PY" || true
 
   echo "== write-api pods ==";
   kubectl -n "$NS" get pod -l app=write-api -o wide || true
-  kubectl -n "$NS" get pod -l app=write-api,pool=burst -o wide || true
+  kubectl -n "$NS" get pod -l app=write-api-burst -o wide || true
   echo
 
   echo "== write-api svc/endpoints ==";
@@ -88,7 +88,7 @@ PY" || true
 
   echo "== write-api logs (10m) ==";
   kubectl -n "$NS" logs -l app=write-api --since=10m --tail=200 || true
-  kubectl -n "$NS" logs -l app=write-api,pool=burst --since=10m --tail=200 || true
+  kubectl -n "$NS" logs -l app=write-api-burst --since=10m --tail=200 || true
   echo
 
   echo "== events (tail) ==";
@@ -97,14 +97,13 @@ PY" || true
 
   echo "== HPA ==";
   kubectl -n "$NS" get hpa || true
-  kubectl -n "$NS" describe hpa write-api-burst-primary-hpa 2>/dev/null || true
-  kubectl -n "$NS" describe hpa write-api-burst-secondary-hpa 2>/dev/null || true
+  kubectl -n "$NS" describe hpa write-api-hpa 2>/dev/null || true
+  kubectl -n "$NS" describe hpa write-api-burst-hpa 2>/dev/null || true
   echo
 
   echo "== KEDA ==";
   kubectl -n "$NS" get scaledobject 2>/dev/null || true
-  kubectl -n "$NS" describe scaledobject worker-svc-sqs-primary 2>/dev/null || true
-  kubectl -n "$NS" describe scaledobject worker-svc-sqs-secondary 2>/dev/null || true
+  kubectl -n "$NS" describe scaledobject worker-svc-burst 2>/dev/null || true
   echo
 
   echo "== CoreDNS ==";

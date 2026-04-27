@@ -25,10 +25,3 @@ resource "aws_elasticache_replication_group" "redis" {
 
   tags = { Name = "ticketing-redis", Environment = var.env }
 }
-
-# Replication group 리소스는 provider 5.x+ 에서 cache_nodes 블록을 내보내지 않는다.
-# 단일 샤드/비클러스터 모드에서는 member_clusters[0] 이 실제 캐시 클러스터 ID이므로
-# aws_elasticache_cluster 로 AZ 를 조회한다.
-data "aws_elasticache_cluster" "redis_primary" {
-  cluster_id = one(aws_elasticache_replication_group.redis.member_clusters)
-}

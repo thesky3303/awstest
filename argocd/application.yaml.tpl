@@ -1,4 +1,3 @@
-# terraform: templatefile → ../argocd/application.yaml (local_file argocd_application)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

@@ -86,28 +86,6 @@ module "rds" {
   depends_on            = [module.network]
 }
 
-locals {
-  # EKS public subnet -> AZ 매핑 (burst nodegroup 을 특정 AZ 로 제한할 때 사용)
-  public_subnet_by_az = zipmap(module.network.public_subnet_azs, module.network.public_subnet_ids)
-
-  # Primary AZ: 쓰기 경로 기준으로 RDS Writer AZ 를 최우선으로 둔다.
-  burst_primary_az = module.rds.writer_availability_zone
-
-  # Secondary AZ: 클러스터가 실제로 사용하는 AZ 집합(퍼블릭 서브넷) 중 Primary 가 아닌 AZ
-  burst_secondary_az = try(
-    [for az in distinct(module.network.public_subnet_azs) : az if az != local.burst_primary_az][0],
-    local.burst_primary_az,
-  )
-
-  burst_primary_subnet_ids = [
-    lookup(local.public_subnet_by_az, local.burst_primary_az, module.network.public_subnet_ids[0]),
-  ]
-
-  burst_secondary_subnet_ids = [
-    lookup(local.public_subnet_by_az, local.burst_secondary_az, module.network.public_subnet_ids[1]),
-  ]
-}
-
 resource "null_resource" "db_schema_init" {
   count = var.enable_db_schema_init ? 1 : 0
 
@@ -170,17 +148,6 @@ module "eks" {
   app_node_desired_size      = var.eks_app_node_desired_size
   app_node_min_size          = var.eks_app_node_min_size
   app_node_max_size          = var.eks_app_node_max_size
-
-  burst_primary_subnet_ids   = local.burst_primary_subnet_ids
-  burst_secondary_subnet_ids = local.burst_secondary_subnet_ids
-
-  # 평시 0, 이벤트 전/중에 desired 를 올려 웜업(Cluster Autoscaler + ASG).
-  burst_primary_desired_size   = 0
-  burst_primary_min_size       = 0
-  burst_primary_max_size       = var.eks_app_node_max_size
-  burst_secondary_desired_size = 0
-  burst_secondary_min_size     = 0
-  burst_secondary_max_size     = var.eks_app_node_max_size
   depends_on                 = [module.network]
 }
 

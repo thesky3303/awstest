@@ -36,11 +36,9 @@ if [[ -n "$ACCOUNT_ID" && -n "$REGION" ]]; then
   kubectl -n "$NS" set image deploy/read-api "read-api=${WAS_IMAGE}" >/dev/null || true
   kubectl -n "$NS" set image deploy/read-api-burst "read-api=${WAS_IMAGE}" >/dev/null || true
   kubectl -n "$NS" set image deploy/write-api "write-api=${WAS_IMAGE}" >/dev/null || true
-  kubectl -n "$NS" set image deploy/write-api-burst-primary "write-api=${WAS_IMAGE}" >/dev/null || true
-  kubectl -n "$NS" set image deploy/write-api-burst-secondary "write-api=${WAS_IMAGE}" >/dev/null || true
+  kubectl -n "$NS" set image deploy/write-api-burst "write-api=${WAS_IMAGE}" >/dev/null || true
   kubectl -n "$NS" set image deploy/worker-svc "worker-svc=${WORKER_IMAGE}" >/dev/null || true
-  kubectl -n "$NS" set image deploy/worker-svc-burst-primary "worker-svc=${WORKER_IMAGE}" >/dev/null || true
-  kubectl -n "$NS" set image deploy/worker-svc-burst-secondary "worker-svc=${WORKER_IMAGE}" >/dev/null || true
+  kubectl -n "$NS" set image deploy/worker-svc-burst "worker-svc=${WORKER_IMAGE}" >/dev/null || true
 fi
 
 SQS_ROLE_ARN="$(terraform output -raw sqs_access_role_arn 2>/dev/null || true)"
@@ -51,7 +49,7 @@ fi
 
 TICKETING_NAMESPACE="$NS" bash "$ROOT_DIR/k8s/scripts/sync-s3-endpoints-from-ingress.sh"
 kubectl -n "$NS" patch cm ticketing-config --type merge -p '{"data":{"DB_NAME":"ticketing"}}'
-kubectl -n "$NS" rollout restart deploy/worker-svc deploy/worker-svc-burst-primary deploy/worker-svc-burst-secondary || true
+kubectl -n "$NS" rollout restart deploy/worker-svc deploy/worker-svc-burst || true
 kubectl -n "$NS" rollout restart deploy/read-api deploy/read-api-burst || true
-kubectl -n "$NS" rollout restart deploy/write-api deploy/write-api-burst-primary deploy/write-api-burst-secondary || true
+kubectl -n "$NS" rollout restart deploy/write-api deploy/write-api-burst || true
 

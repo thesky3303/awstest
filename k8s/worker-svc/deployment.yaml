@@ -6,7 +6,7 @@ metadata:
   labels:
     app: worker-svc
 spec:
-  # stable 1대 + worker-svc-burst-primary/secondary(KEDA). burst 는 선점 없음(Never).
+  # stable 1대 + worker-svc-burst(KEDA). burst 는 선점 없음(Never).
   replicas: 1
   selector:
     matchLabels:

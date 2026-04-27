@@ -373,11 +373,9 @@ echo "ticketing Application 상태 폴링 (최대 10분)..."
 for i in $(seq 1 60); do
   SYNC=$(kubectl get application ticketing -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
   HEALTH=$(kubectl get application ticketing -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
-  if [[ "$SYNC" == "Synced" ]]; then
-    if [[ "$HEALTH" == "Healthy" || "$HEALTH" == "Suspended" ]]; then
-      echo "  Synced+${HEALTH} 달성 ($((i*10))s)"
-      break
-    fi
+  if [[ "$SYNC" == "Synced" && ( "$HEALTH" == "Healthy" || "$HEALTH" == "Suspended" ) ]]; then
+    echo "  Synced+${HEALTH} 달성 ($((i*10))s)"
+    break
   fi
   echo "  [$((i*10))s] sync=$SYNC health=$HEALTH"
   if [[ "$i" -eq 60 ]]; then
@@ -428,9 +426,10 @@ echo ""
 echo "=========================================="
 echo " [13/14] API Gateway VPC Link Integration 연결"
 echo "=========================================="
-echo "Internal ALB 주소 대기 중 (ingress가 ALB 만들 때까지)..."
+ING_NAME="${TICKETING_INGRESS_NAME:-ticketing-ingress}"
+echo "Internal ALB 주소 대기 중 (ingress=$ING_NAME)..."
 for i in $(seq 1 30); do
-  ALB_ADDRESS="$(kubectl get ingress -n ticketing -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+  ALB_ADDRESS="$(kubectl -n ticketing get ingress "$ING_NAME" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
   if [[ -n "$ALB_ADDRESS" ]]; then break; fi
   echo "  대기 중... ($i/30)"
   sleep 10
@@ -438,6 +437,13 @@ done
 
 if [[ -z "$ALB_ADDRESS" ]]; then
   echo "WARNING: Internal ALB 주소를 가져올 수 없습니다. API GW Integration이 생성되지 않습니다."
+  echo "debug: kubectl -n ticketing get ingress" >&2
+  kubectl -n ticketing get ingress -o wide >&2 || true
+  echo "debug: describe ingress/$ING_NAME" >&2
+  kubectl -n ticketing describe ingress "$ING_NAME" >&2 || true
+  echo "debug: aws-load-balancer-controller (kube-system)" >&2
+  kubectl -n kube-system get deploy aws-load-balancer-controller >/dev/null 2>&1 && \
+    kubectl -n kube-system get pods -l app.kubernetes.io/name=aws-load-balancer-controller -o wide >&2 || true
 else
   echo "Internal ALB: $ALB_ADDRESS"
 

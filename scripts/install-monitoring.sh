@@ -6,18 +6,26 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "=== Installing kube-prometheus-stack ==="
 
-# --wait 는 Prometheus Operator + Prometheus/Grafana/Alertmanager PVC 등이 전부 Ready 될 때까지 대기한다.
-# t3.small·PVC 프로비저닝·노드 부족 시 10m 은 자주 부족하다. 필요 시: KUBE_PROM_STACK_HELM_TIMEOUT=40m
+# "멈춤"처럼 보이는 1순위 원인: helm repo update 는 네트워크가 꼬이면 오래 대기할 수 있다.
+# helm 3.7+ 는 --timeout 을 지원하므로 여기만 최소로 타임아웃을 건다.
+HELM_REPO_TIMEOUT="${HELM_REPO_TIMEOUT:-3m}"
+
+# 나머지 helm upgrade/install 은 --timeout 이 있으므로 무한 멈춤은 없지만,
+# 첫 설치는 PVC/리소스/노드 여유에 따라 10m 를 넘기기 쉬워 context deadline exceeded 로 자주 실패한다.
+# 기본값만 25m 로 늘리고, 더 필요하면 env 로 오버라이드한다.
 KPS_TIMEOUT="${KUBE_PROM_STACK_HELM_TIMEOUT:-25m}"
-LOKI_TIMEOUT="${LOKI_HELM_TIMEOUT:-10m}"
-PROMTAIL_TIMEOUT="${PROMTAIL_HELM_TIMEOUT:-10m}"
+LOKI_TIMEOUT="${LOKI_HELM_TIMEOUT:-5m}"
+PROMTAIL_TIMEOUT="${PROMTAIL_HELM_TIMEOUT:-5m}"
 
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
 helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
-helm repo update
+helm repo update --timeout "$HELM_REPO_TIMEOUT"
 
 # namespace 먼저 생성
 kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+# PriorityClass (values에서 사용: ticketing-priority-platform)
+kubectl apply -f "$ROOT_DIR/k8s/priorityclass-ticketing.yaml"
 
 # gp3 StorageClass (EBS CSI 드라이버용)
 kubectl apply -f "$ROOT_DIR/monitoring/k8s/storageclass-gp3.yaml"

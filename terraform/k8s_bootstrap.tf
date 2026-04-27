@@ -22,19 +22,14 @@ resource "null_resource" "k8s_bootstrap_after_apply" {
     metrics_server_replicas     = var.eks_metrics_server_replica_count
     kustomization               = filemd5(abspath("${path.root}/../k8s/kustomization.yaml"))
     read_api_deploy_burst       = filemd5(abspath("${path.root}/../k8s/read-api/deployment-burst.yaml"))
-    write_api_deploy_burst_pri  = filemd5(abspath("${path.root}/../k8s/write-api/deployment-burst-primary.yaml"))
-    write_api_deploy_burst_sec  = filemd5(abspath("${path.root}/../k8s/write-api/deployment-burst-secondary.yaml"))
-    worker_deploy_burst_pri     = filemd5(abspath("${path.root}/../k8s/worker-svc/deployment-burst-primary.yaml"))
-    worker_deploy_burst_sec     = filemd5(abspath("${path.root}/../k8s/worker-svc/deployment-burst-secondary.yaml"))
+    write_api_deploy_burst      = filemd5(abspath("${path.root}/../k8s/write-api/deployment-burst.yaml"))
+    worker_deploy_burst         = filemd5(abspath("${path.root}/../k8s/worker-svc/deployment-burst.yaml"))
     read_api_hpa                = filemd5(abspath("${path.root}/../k8s/read-api/hpa.yaml"))
-    write_api_hpa_pri           = filemd5(abspath("${path.root}/../k8s/write-api/hpa-primary.yaml"))
-    write_api_hpa_sec           = filemd5(abspath("${path.root}/../k8s/write-api/hpa-secondary.yaml"))
+    write_api_hpa               = filemd5(abspath("${path.root}/../k8s/write-api/hpa.yaml"))
     k8s_priorityclass           = filemd5(abspath("${path.root}/../k8s/priorityclass-ticketing.yaml"))
     k8s_pdb                     = filemd5(abspath("${path.root}/../k8s/pdb-user-facing.yaml"))
     keda_triggerauth            = filemd5(abspath("${path.root}/../k8s/keda/triggerauthentication-worker-sqs.yaml"))
-    keda_kustomization          = filemd5(abspath("${path.root}/../k8s/keda/kustomization.yaml"))
-    keda_scaledobject_worker_pri = filemd5(abspath("${path.root}/../k8s/keda/scaledobject-worker-svc-sqs-primary.yaml"))
-    keda_scaledobject_worker_sec = filemd5(abspath("${path.root}/../k8s/keda/scaledobject-worker-svc-sqs-secondary.yaml"))
+    keda_scaledobject_worker    = filemd5(abspath("${path.root}/../k8s/keda/scaledobject-worker-svc-sqs.yaml"))
     post_apply_bootstrap_script = filemd5(abspath("${path.root}/scripts/post_apply_k8s_bootstrap.sh"))
   }
 

@@ -216,9 +216,16 @@ def _refund_concert_booking(user_id: int, booking_id: int):
         from cache.redis_client import redis_client
         from concert.seat_hold import release_seats_on_refund, remove_confirmed_seats
 
-        # Redis 좌석·remain을 먼저 맞춘 뒤 스냅샷 무효화해야 한다.
-        # concert_read_cache 는 DB ACTIVE ⊎ Redis confirmed set 로 병합하므로,
-        # 무효화만 먼저 하면 다음 조회가 아직 Redis 에 남은 확정 정보를 다시 스냅샷에 실어 ‘시점 불일치’처럼 보일 수 있다.
+        if concert_id_for_cache > 0:
+            invalidate_concert_caches_after_booking(
+                concert_id_for_cache,
+                show_id=show_id_for_cache if show_id_for_cache > 0 else None,
+            )
+
+        # Redis 정합성 보정(best-effort):
+        # - confirmed set에서 환불 좌석 제거(중복좌석 1차 가드)
+        # - seat 키(concert:seat:*)와 hold set도 정리(any_confirmed 0차 가드의 "CONFIRMED" 문자열 잔재 제거, 7433228)
+        # - remain 단일 카운터를 DB 값으로 동기화(잔여 복구)
         if show_id_for_cache > 0:
             if refunded_seat_keys:
                 remove_confirmed_seats(show_id=int(show_id_for_cache), seat_keys=refunded_seat_keys)
@@ -233,12 +240,6 @@ def _refund_concert_booking(user_id: int, booking_id: int):
                     release_seats_on_refund(show_id=int(show_id_for_cache), seats=seats_tuples)
             if remain_after_db is not None:
                 redis_client.set(f"concert:show:{int(show_id_for_cache)}:remain:v1", int(remain_after_db))
-
-        if concert_id_for_cache > 0:
-            invalidate_concert_caches_after_booking(
-                concert_id_for_cache,
-                show_id=show_id_for_cache if show_id_for_cache > 0 else None,
-            )
     except Exception:
         pass
 

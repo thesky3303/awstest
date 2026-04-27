@@ -1,47 +1,27 @@
-# KEDA 대상(Primary burst lane). stable(worker-svc) 1대는 ticketing-priority-worker-bulk-stable(선점), 추가분만 여기(선점 없음).
+# KEDA 대상. stable(worker-svc) 1대는 ticketing-priority-worker-bulk-stable(선점), 추가분만 여기(선점 없음).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: worker-svc-burst-primary
+  name: worker-svc-burst
   namespace: ticketing
   labels:
     app: worker-svc
     pool: burst
-    burst-zone: primary
 spec:
   replicas: 0
   selector:
     matchLabels:
       app: worker-svc
       pool: burst
-      burst-zone: primary
   template:
     metadata:
       labels:
         app: worker-svc
         pool: burst
-        burst-zone: primary
     spec:
       enableServiceLinks: false
       serviceAccountName: sqs-access-sa
       priorityClassName: ticketing-priority-worker-bulk-burst
-      nodeSelector:
-        workload: ticketing-burst
-        burst-zone: primary
-      tolerations:
-        - key: workload
-          operator: Equal
-          value: ticketing-burst
-          effect: NoSchedule
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
-          labelSelector:
-            matchLabels:
-              app: worker-svc
-              pool: burst
-              burst-zone: primary
       containers:
         - name: worker-svc
           image: ticketing/worker-svc:latest

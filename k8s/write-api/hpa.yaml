@@ -1,17 +1,17 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: write-api-burst-primary-hpa
+  name: write-api-hpa
   namespace: ticketing
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: write-api-burst-primary
-  # Resource(CPU/memory) 메트릭만 쓰는 HPA는 이 클러스터에서 minReplicas<1 및 scale-to-zero 가 불가하다.
-  # (Object/External 메트릭 없이 min=0 은 API 거절)
+    name: write-api-burst
+  # stable write-api 1대는 HPA 밖. burst 만 1~23.
+  # 이 클러스터는 Resource metric(HPA)로 scale-to-zero(min=0)를 허용하지 않음.
   minReplicas: 1
-  maxReplicas: 60
+  maxReplicas: 23
   metrics:
     - type: Resource
       resource:

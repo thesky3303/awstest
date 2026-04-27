@@ -16,14 +16,4 @@ output "app_node_group_name" {
   description = "Managed node group name for app nodes (read/write, etc)."
 }
 
-output "burst_primary_node_group_name" {
-  value       = aws_eks_node_group.burst_primary.node_group_name
-  description = "Managed node group name for burst-primary nodes (ticketing burst lane)."
-}
-
-output "burst_secondary_node_group_name" {
-  value       = aws_eks_node_group.burst_secondary.node_group_name
-  description = "Managed node group name for burst-secondary nodes (ticketing burst lane)."
-}
-
 

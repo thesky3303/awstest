@@ -1,6 +1,5 @@
 output "vpc_id" { value = aws_vpc.main.id }
 output "public_subnet_ids" { value = aws_subnet.public[*].id }
-output "public_subnet_azs" { value = aws_subnet.public[*].availability_zone }
 output "private_subnet_ids" { value = aws_subnet.private[*].id }
 
 # Pod 전용 서브넷(secondary CIDR 100.64.0.0/16 내).
