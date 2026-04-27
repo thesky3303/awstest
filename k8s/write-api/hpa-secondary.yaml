@@ -8,7 +8,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: write-api-burst-secondary
-  minReplicas: 0
+  # Resource-only HPA: minReplicas 는 1 이상이어야 함(위 primary 와 동일 제약).
+  minReplicas: 1
   maxReplicas: 20
   metrics:
     - type: Resource

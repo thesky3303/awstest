@@ -293,7 +293,7 @@ SELECT
 WHERE NOT EXISTS (SELECT 1 FROM concerts WHERE title='2026 뮤지컬 콘서트 <더 미션 : K>' LIMIT 1);
 
 SET @cid1 := (SELECT concert_id FROM concerts WHERE title='2026 오페라 갈라 콘서트 - 봄(Spring)' ORDER BY concert_id ASC LIMIT 1);
-SET @cid2 := (SELECT concert_id FROM concerts WHERE title='2026 뮤지컬 콘서트 <더 미션 : K> ' ORDER BY concert_id ASC LIMIT 1);
+SET @cid2 := (SELECT concert_id FROM concerts WHERE title='2026 뮤지컬 콘서트 <더 미션 : K>' ORDER BY concert_id ASC LIMIT 1);
 
 INSERT INTO concert_shows (
   concert_id, show_date, venue_name, venue_address, hall_name,

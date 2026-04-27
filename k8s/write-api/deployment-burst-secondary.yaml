@@ -1,4 +1,4 @@
-# HPA 대상(Secondary burst lane). 예비 AZ에 소량 배치(기본 0).
+# HPA 대상(Secondary burst lane). 예비 AZ에 소량 배치. (Resource HPA min>=1 이므로 기본 1)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,7 +9,7 @@ metadata:
     pool: burst
     burst-zone: secondary
 spec:
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app: write-api

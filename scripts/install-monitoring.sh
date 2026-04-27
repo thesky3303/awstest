@@ -5,6 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "=== Installing kube-prometheus-stack ==="
+
+# --wait 는 Prometheus Operator + Prometheus/Grafana/Alertmanager PVC 등이 전부 Ready 될 때까지 대기한다.
+# t3.small·PVC 프로비저닝·노드 부족 시 10m 은 자주 부족하다. 필요 시: KUBE_PROM_STACK_HELM_TIMEOUT=40m
+KPS_TIMEOUT="${KUBE_PROM_STACK_HELM_TIMEOUT:-25m}"
+LOKI_TIMEOUT="${LOKI_HELM_TIMEOUT:-10m}"
+PROMTAIL_TIMEOUT="${PROMTAIL_HELM_TIMEOUT:-10m}"
+
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
 helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
 helm repo update
@@ -22,7 +29,7 @@ kubectl apply -f "$ROOT_DIR/monitoring/k8s/grafana-dashboards-configmap.yaml"
 helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
   --namespace monitoring --create-namespace \
   --values "$ROOT_DIR/monitoring/values-kube-prometheus-stack.yaml" \
-  --wait --timeout 10m
+  --wait --timeout "$KPS_TIMEOUT"
 
 # PrometheusRule (kube-prometheus-stack이 CRD를 설치한 뒤에 적용)
 kubectl apply -f "$ROOT_DIR/monitoring/prometheus-rules.yaml"
@@ -31,13 +38,13 @@ echo "=== Installing Loki ==="
 helm upgrade --install loki grafana/loki \
   --namespace monitoring \
   --values "$ROOT_DIR/monitoring/values-loki.yaml" \
-  --wait --timeout 5m
+  --wait --timeout "$LOKI_TIMEOUT"
 
 echo "=== Installing Promtail ==="
 helm upgrade --install promtail grafana/promtail \
   --namespace monitoring \
   --set "config.clients[0].url=http://loki:3100/loki/api/v1/push" \
-  --wait --timeout 5m
+  --wait --timeout "$PROMTAIL_TIMEOUT"
 
 # Grafana ALB Ingress
 kubectl apply -f "$ROOT_DIR/monitoring/k8s/grafana-ingress.yaml"

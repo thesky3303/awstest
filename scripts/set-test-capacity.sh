@@ -8,13 +8,14 @@ set -o pipefail 2>/dev/null || true
 #
 # 적용 값:
 #   - 노드 그룹: minSize = desiredSize = -n,  maxSize = max(-n + 5, AWS에 현재 설정된 maxSize)  (5는 NODE_MAX_DELTA)
-#   - write HPA(burst): 총 -wr 를 primary/secondary 로 80:20 분할해 각 HPA min/max 반영
+#   - write HPA(burst): 총 -wr 를 primary/secondary 로 80:20 분할(단, secondary 몫이 0이면 secondary HPA 삭제 후 primary 에 몰아줌 — Resource HPA는 min<1 불가)
 #   - read HPA(burst): minReplicas = -r, maxReplicas = min + 20
 #   - worker KEDA: 총 -wk 를 primary/secondary 로 80:20 분할해 각 ScaledObject min/max 반영 + paused 해제
 #
 # 버퍼 오버라이드: SET_TEST_CAP_POD_MAX_DELTA (기본 20), SET_TEST_CAP_NODE_MAX_DELTA (기본 5)
 
 NS="${KUBECTL_NAMESPACE:-ticketing}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 POD_MAX_DELTA="${SET_TEST_CAP_POD_MAX_DELTA:-20}"
 NODE_MAX_DELTA="${SET_TEST_CAP_NODE_MAX_DELTA:-5}"
@@ -88,12 +89,27 @@ _set_hpa_write_split() {
     return 0
   fi
 
+  kubectl apply -f "$SCRIPT_DIR/../k8s/write-api/hpa-primary.yaml" >/dev/null
+
   local pri=$(( (rep * 8 + 9) / 10 )) # ceil(rep*0.8)
   local sec=$(( rep - pri ))
   if (( sec < 0 )); then sec=0; fi
 
-  local max_pri=$((pri + POD_MAX_DELTA))
-  local max_sec=$((sec + POD_MAX_DELTA))
+  local max_pri max_sec
+  # Resource-only HPA: secondary minReplicas 를 0으로 둘 수 없음 → secondary 몫이 0이면 HPA를 없애고 primary에 합산한다.
+  if (( sec == 0 )); then
+    kubectl -n "$NS" delete hpa/write-api-burst-secondary-hpa --ignore-not-found >/dev/null 2>&1 || true
+    pri="$rep"
+    max_pri=$((pri + POD_MAX_DELTA))
+    if (( max_pri < pri )); then max_pri="$pri"; fi
+    kubectl -n "$NS" patch hpa/write-api-burst-primary-hpa --type merge -p "{\"spec\":{\"minReplicas\":${pri},\"maxReplicas\":${max_pri}}}" >/dev/null
+    return 0
+  fi
+
+  kubectl apply -f "$SCRIPT_DIR/../k8s/write-api/hpa-secondary.yaml" >/dev/null
+
+  max_pri=$((pri + POD_MAX_DELTA))
+  max_sec=$((sec + POD_MAX_DELTA))
   if (( max_pri < pri )); then max_pri="$pri"; fi
   if (( max_sec < sec )); then max_sec="$sec"; fi
 
@@ -216,6 +232,9 @@ _force_scale_targets_now() {
   if (( wr > 0 )); then
     local wr_pri=$(( (wr * 8 + 9) / 10 ))
     local wr_sec=$(( wr - wr_pri ))
+    if (( wr_sec == 0 )); then
+      wr_pri="$wr"
+    fi
     kubectl -n "$NS" scale deploy/write-api-burst-primary --replicas="$wr_pri" >/dev/null 2>&1 || true
     kubectl -n "$NS" scale deploy/write-api-burst-secondary --replicas="$wr_sec" >/dev/null 2>&1 || true
   else

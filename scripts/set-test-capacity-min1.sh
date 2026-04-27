@@ -55,17 +55,14 @@ _set_write_read_burst_min1_keep_hpa() {
   # - write-api burst lane은 primary/secondary로 쪼개져 있어, secondary는 0으로 내리는 과정에서
   #   HPA 스펙 제약(예: maxReplicas=0 거절)이 있을 수 있어 best-effort로 삭제할 수 있다.
 
-  # HPA가 없으면 먼저 복구(멱등)
+  # HPA가 없으면 먼저 복구(멱등). secondary write HPA는 min1 모드에서 사용하지 않는다.
   kubectl -n "$NS" get hpa/write-api-burst-primary-hpa >/dev/null 2>&1 || kubectl apply -f "$SCRIPT_DIR/../k8s/write-api/hpa-primary.yaml" >/dev/null
-  kubectl -n "$NS" get hpa/write-api-burst-secondary-hpa >/dev/null 2>&1 || kubectl apply -f "$SCRIPT_DIR/../k8s/write-api/hpa-secondary.yaml" >/dev/null
   kubectl -n "$NS" get hpa/read-api-hpa  >/dev/null 2>&1 || kubectl apply -f "$SCRIPT_DIR/../k8s/read-api/hpa.yaml"  >/dev/null
 
   # write burst lane: primary만 1로 고정, secondary는 0으로 내린다(80/20 레인 유지).
-  # secondary HPA는 일부 클러스터에서 maxReplicas=0 패치가 거절될 수 있어 best-effort로 삭제한다.
+  # Resource-only HPA는 minReplicas<1 불가 → secondary HPA는 삭제하고 Deployment만 0으로 둔다.
   kubectl -n "$NS" patch hpa/write-api-burst-primary-hpa --type merge -p "{\"spec\":{\"minReplicas\":1,\"maxReplicas\":1}}" >/dev/null
-  if ! kubectl -n "$NS" patch hpa/write-api-burst-secondary-hpa --type merge -p "{\"spec\":{\"minReplicas\":0,\"maxReplicas\":0}}" >/dev/null 2>&1; then
-    kubectl -n "$NS" delete hpa/write-api-burst-secondary-hpa --ignore-not-found >/dev/null 2>&1 || true
-  fi
+  kubectl -n "$NS" delete hpa/write-api-burst-secondary-hpa --ignore-not-found >/dev/null 2>&1 || true
 
   # read burst: min=max=1로 고정 → Pending 유발(대량 burst) 방지 + 다른 스크립트가 patch로 다시 올리기 쉬움
   kubectl -n "$NS" patch hpa/read-api-hpa  --type merge -p "{\"spec\":{\"minReplicas\":1,\"maxReplicas\":1}}" >/dev/null

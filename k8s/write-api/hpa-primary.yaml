@@ -8,8 +8,9 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: write-api-burst-primary
-  # 평시 0으로 두고, 이벤트 전 웜업으로 replicas 를 올리는 운영을 기본으로 한다.
-  minReplicas: 0
+  # Resource(CPU/memory) 메트릭만 쓰는 HPA는 이 클러스터에서 minReplicas<1 및 scale-to-zero 가 불가하다.
+  # (Object/External 메트릭 없이 min=0 은 API 거절)
+  minReplicas: 1
   maxReplicas: 60
   metrics:
     - type: Resource

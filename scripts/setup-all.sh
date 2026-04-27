@@ -250,10 +250,10 @@ echo "MySQL 클라이언트 파드 대기 중..."
 kubectl wait --for=condition=Ready pod/mysql-init -n ticketing --timeout=120s
 
 cat "$ROOT/db-schema/create.sql" | kubectl exec -i mysql-init -n ticketing -- \
-  mysql --force --default-character-set=utf8mb4 -h "$DB_WRITER_HOST" -u root -p"$DB_PASSWORD" 2>&1 || true
+  env MYSQL_PWD="$DB_PASSWORD" mysql --force --default-character-set=utf8mb4 -h "$DB_WRITER_HOST" -u root 2>&1 || true
 
 cat "$ROOT/db-schema/Insert.sql" | kubectl exec -i mysql-init -n ticketing -- \
-  mysql --default-character-set=utf8mb4 -h "$DB_WRITER_HOST" -u root -p"$DB_PASSWORD" ticketing 2>&1 || true
+  env MYSQL_PWD="$DB_PASSWORD" mysql --default-character-set=utf8mb4 -h "$DB_WRITER_HOST" -u root ticketing 2>&1 || true
 
 kubectl delete pod mysql-init -n ticketing --wait=false
 echo "DB 스키마 + 시드 데이터 적용 완료"
