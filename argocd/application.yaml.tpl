@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/thesky3303/awstest.git
+    repoURL: ${repo_url}
     targetRevision: ${target_revision}
     path: k8s
   destination:

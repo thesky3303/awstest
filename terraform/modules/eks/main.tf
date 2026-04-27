@@ -198,9 +198,12 @@ resource "null_resource" "pod_eni_configs" {
   }
 
   # vpc-cni 애드온 이후: ENIConfig CRD 가 존재해야 apply 가능.
-  # 노드그룹 **이전**에 apply 해야 함: CUSTOM_NETWORK_CFG=true 일 때 ENIConfig 가 없으면
-  # 신규 노드가 Ready 되지 못해 NodeCreationFailure / Unhealthy nodes 로 노드그룹이 실패한다.
-  # (AWS 권장: ENIConfig 를 워커 기동 전에 생성.)
+  # 주의: 반드시 노드 그룹 "이전"에 적용되어야 한다.
+  #   custom networking(AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG=true) 가 켜진 상태에서
+  #   ENIConfig 가 없이 노드가 올라오면 ipamd 가 secondary IP 풀을 못 만들어
+  #   kubelet NotReady → EKS 가 NodeCreationFailure: Unhealthy nodes 로 노드그룹 자체를 실패시킴.
+  # ENIConfig 는 declarative CRD 라서 노드가 없어도 kubectl apply 가능하고,
+  # 노드가 부팅하는 시점에 ipamd 가 자동으로 참조한다.
   depends_on = [
     aws_eks_addon.vpc_cni,
   ]
@@ -246,6 +249,8 @@ resource "aws_eks_node_group" "app" {
     aws_iam_role_policy_attachment.eks_node_cni,
     aws_iam_role_policy_attachment.eks_node_ecr,
     aws_eks_addon.vpc_cni,
+    # custom networking 켠 상태에서는 ENIConfig 가 노드 부팅 전에 깔려 있어야
+    # ipamd 가 정상 초기화됨. 없이 시작하면 NodeCreationFailure.
     null_resource.pod_eni_configs,
     null_resource.cleanup_vpc_leftovers_post,
   ]
@@ -278,6 +283,13 @@ resource "aws_eks_addon" "metrics_server" {
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
   # EKS metrics-server 애드온 configuration_values 스키마에 replicaCount(Helm) 없음 — 레플리카는 post_apply_k8s_bootstrap.sh 에서 kubectl scale
+  # QoS: requests=limits → Guaranteed. 죽으면 HPA 메트릭 공급 중단 → read/write-burst HPA 동작 멈춤.
+  configuration_values = jsonencode({
+    resources = {
+      requests = { cpu = "100m", memory = "200Mi" }
+      limits   = { cpu = "100m", memory = "200Mi" }
+    }
+  })
 
   depends_on = [aws_eks_node_group.app]
 }
@@ -318,6 +330,22 @@ resource "aws_eks_addon" "ebs_csi" {
   service_account_role_arn    = aws_iam_role.ebs_csi.arn
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
+  # QoS: controller 는 PV 프로비저닝 주체라 Guaranteed. node 는 DaemonSet — attach/detach 이벤트만 처리라 가볍게.
+  # 기본 limits 가 비정상적으로 컸음(controller 1312Mi) → 현실적 값으로 고정.
+  configuration_values = jsonencode({
+    controller = {
+      resources = {
+        requests = { cpu = "100m", memory = "200Mi" }
+        limits   = { cpu = "100m", memory = "200Mi" }
+      }
+    }
+    node = {
+      resources = {
+        requests = { cpu = "50m", memory = "100Mi" }
+        limits   = { cpu = "50m", memory = "100Mi" }
+      }
+    }
+  })
 
   depends_on = [
     aws_eks_node_group.app,

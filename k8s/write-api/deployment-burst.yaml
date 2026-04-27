@@ -23,13 +23,8 @@ spec:
       enableServiceLinks: false
       priorityClassName: ticketing-priority-write-api-burst
       serviceAccountName: sqs-access-sa
+      terminationGracePeriodSeconds: 30
       topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: ScheduleAnyway
-          labelSelector:
-            matchLabels:
-              app: write-api
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
@@ -40,7 +35,23 @@ spec:
         - name: write-api
           image: ticketing/ticketing-was:latest
           imagePullPolicy: Always
-          command: ["uvicorn", "write_app:app", "--host", "0.0.0.0", "--port", "5001"]
+          # burst: 단일 이벤트루프에 커넥션/WR 폭주가 몰리면 health까지 지연되어 probe 재시작 루프가 난다.
+          # workers로 프로세스를 나누고 backlog를 키워 accept/health 안정성을 우선한다.
+          command:
+            [
+              "uvicorn",
+              "write_app:app",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "5001",
+              "--workers",
+              "2",
+              "--backlog",
+              "8192",
+              "--timeout-keep-alive",
+              "5",
+            ]
           ports:
             - containerPort: 5001
           envFrom:
@@ -53,30 +64,31 @@ spec:
               value: "64"
           resources:
             requests:
-              memory: "256Mi"
-              cpu: "150m"
-            limits:
               memory: "768Mi"
               cpu: "1000m"
+            limits:
+              memory: "1536Mi"
+              cpu: "2000m"
           startupProbe:
             httpGet:
               path: /api/write/health
               port: 5001
             periodSeconds: 5
-            failureThreshold: 60
+            timeoutSeconds: 10
+            failureThreshold: 180
           livenessProbe:
             httpGet:
               path: /api/write/health
               port: 5001
             initialDelaySeconds: 10
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 5
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 10
           readinessProbe:
             httpGet:
               path: /api/write/health
               port: 5001
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 6
+            timeoutSeconds: 15
+            failureThreshold: 30
