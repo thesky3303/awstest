@@ -76,13 +76,19 @@ echo "argocd-server rollout 대기..."
 kubectl rollout status deployment/argocd-server -n "$NAMESPACE" --timeout=300s
 
 # ── ticketing Application 등록 ────────────────────────────────────
+# terraform apply 가 application.yaml.tpl 을 렌더해 argocd/application.yaml 을 만든다(argocd.tf).
+# 플레이스홀더(${repo_url}, ${target_revision})가 남아 있으면 apply 전이거나 실패한 상태다.
 APP_MANIFEST="$ROOT/argocd/application.yaml"
-if [[ -f "$APP_MANIFEST" ]]; then
-  echo "Application 등록: $APP_MANIFEST"
-  kubectl apply -f "$APP_MANIFEST"
-else
-  echo "WARN: $APP_MANIFEST 없음 — Application 등록 생략" >&2
+if [[ ! -f "$APP_MANIFEST" ]]; then
+  echo "ERROR: $APP_MANIFEST 없음 — 먼저 terraform apply 로 생성하세요." >&2
+  exit 1
 fi
+if grep -qE '\$\{(repo_url|target_revision)\}' "$APP_MANIFEST" 2>/dev/null; then
+  echo "ERROR: $APP_MANIFEST 에 템플릿 플레이스홀더가 남아 있습니다. terraform apply 를 실행하세요." >&2
+  exit 1
+fi
+echo "Application 등록: $APP_MANIFEST"
+kubectl apply -f "$APP_MANIFEST"
 
 # ── ArgoCD UI 외부 노출 Ingress (internet-facing ALB) ─────────────
 INGRESS_MANIFEST="$ROOT/argocd/argocd-ingress.yaml"

@@ -373,9 +373,11 @@ echo "ticketing Application 상태 폴링 (최대 10분)..."
 for i in $(seq 1 60); do
   SYNC=$(kubectl get application ticketing -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
   HEALTH=$(kubectl get application ticketing -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
-  if [[ "$SYNC" == "Synced" && ( "$HEALTH" == "Healthy" || "$HEALTH" == "Suspended" ) ]]; then
-    echo "  Synced+${HEALTH} 달성 ($((i*10))s)"
-    break
+  if [[ "$SYNC" == "Synced" ]]; then
+    if [[ "$HEALTH" == "Healthy" || "$HEALTH" == "Suspended" ]]; then
+      echo "  Synced+${HEALTH} 달성 ($((i*10))s)"
+      break
+    fi
   fi
   echo "  [$((i*10))s] sync=$SYNC health=$HEALTH"
   if [[ "$i" -eq 60 ]]; then

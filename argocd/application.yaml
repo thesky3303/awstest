@@ -1,3 +1,4 @@
+# terraform: templatefile → ../argocd/application.yaml (local_file argocd_application)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -9,7 +10,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/thesky3303/awstest.git
-    targetRevision: ${target_revision}
+    targetRevision: FINAL
     path: k8s
   destination:
     server: https://kubernetes.default.svc
