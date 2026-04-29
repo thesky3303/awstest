@@ -3,16 +3,14 @@ set -eu
 set -o pipefail 2>/dev/null || true
 
 # 목적:
-# 1) tools-once Pod 안에서 sqs_load_real_concert{5,6,7}.py 실행
+# 1) tools-once Pod 안에서 sqs_load_real_concert5.py 또는 sqs_load_real_concert6.py 실행
 # 2) 종료 후 호스트(로컬)에서 k8s 스냅샷 출력
 #
 # 사용 예:
 #   bash ../scripts/run_concert5_then_snapshot.sh --http-concurrency 2000 --duration-sec 10 --show-id 100 -n 1
 #   bash ../scripts/run_concert5_then_snapshot.sh ... -n 30 -v5    # 명시적 v5 (기본과 동일)
 #   bash ../scripts/run_concert5_then_snapshot.sh ... -n 30 -v6    # v6 부하 스크립트
-#   bash ../scripts/run_concert5_then_snapshot.sh ... -n 30 -v7    # v7 부하 스크립트
 #   bash ../scripts/run_concert5_then_snapshot.sh ... -n 30 v6     # - 없이 v5 / v6 도 허용
-#   bash ../scripts/run_concert5_then_snapshot.sh ... -n 30 v7     # - 없이 v7 도 허용
 #
 # NOTE:
 # - 버전 토큰은 인자 목록의 "맨 끝" 한 개만 인식하고, python에는 넘기지 않는다.
@@ -36,10 +34,6 @@ if [[ ${#py_args[@]} -gt 0 ]]; then
       ;;
     -v6|v6)
       LOAD_SCRIPT="sqs_load_real_concert6.py"
-      py_args=("${py_args[@]:0:$last_i}")
-      ;;
-    -v7|v7)
-      LOAD_SCRIPT="sqs_load_real_concert7.py"
       py_args=("${py_args[@]:0:$last_i}")
       ;;
   esac
