@@ -53,8 +53,11 @@
     if (authResult.AccessToken)  localStorage.setItem(KEY_ACCESS_TOKEN,  authResult.AccessToken);
     if (authResult.RefreshToken) localStorage.setItem(KEY_REFRESH_TOKEN, authResult.RefreshToken);
 
-    // Also set the global bearer token so the existing requestJson picks it up
-    if (authResult.AccessToken) {
+    // API Gateway JWT 매핑($context.authorizer.claims.email/name)은 IdToken 에 클레임이 있다.
+    // Access Token 만 보내면 email/name 이 비어 DB 동기화가 실패한다.
+    if (authResult.IdToken) {
+      window.__TICKETING_AUTH_BEARER_TOKEN__ = authResult.IdToken;
+    } else if (authResult.AccessToken) {
       window.__TICKETING_AUTH_BEARER_TOKEN__ = authResult.AccessToken;
     }
   }
@@ -175,23 +178,23 @@
   }
 
   /**
-   * Ensures the bearer token global is set on page load
-   * if we already have a valid access token in storage.
+   * 세션 복원 시 API 호출용 Bearer 는 IdToken 우선(Access 에는 email/name 클레임 없음).
    */
   function restoreSession() {
-    var token = getAccessToken();
-    if (token && !isTokenExpired(token)) {
-      window.__TICKETING_AUTH_BEARER_TOKEN__ = token;
-      return true;
+    var accTok = getAccessToken();
+    if (!accTok || isTokenExpired(accTok)) {
+      var refreshToken = localStorage.getItem(KEY_REFRESH_TOKEN);
+      if (refreshToken) {
+        cognitoRefreshToken().catch(function () {
+          clearTokens();
+        });
+      }
+      return false;
     }
-    // Try refresh
-    var refreshToken = localStorage.getItem(KEY_REFRESH_TOKEN);
-    if (refreshToken) {
-      cognitoRefreshToken().catch(function () {
-        clearTokens();
-      });
-    }
-    return false;
+    var idTok = getIdToken();
+    window.__TICKETING_AUTH_BEARER_TOKEN__ =
+      idTok && !isTokenExpired(idTok) ? idTok : accTok;
+    return true;
   }
 
   /* ── exports ───────────────────────────────────────────────── */

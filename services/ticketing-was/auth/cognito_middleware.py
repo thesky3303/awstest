@@ -7,10 +7,15 @@ Cognito + API Gateway 인증 미들웨어.
   → 이 미들웨어가 헤더를 읽고 DB에서 user_id를 조회/생성
   → request.state.user_id에 부착
 
-인증이 필요 없는 경로(health check, metrics, 공개 목록 등)는 PUBLIC_PATH_PREFIXES로 스킵.
+주의: Cognito Access Token에는 email/name 클레임이 없어 Gateway가 주입한 x-cognito-email/name 이
+비는 경우가 많다. 클라이언트는 API 호출 시 Bearer 로 IdToken 을 보내면 Gateway 가 검증한
+claims 에서 email/name 이 채워진다. 헤더가 비었을 때는 Authorization Bearer JWT 페이로드에서
+보강한다(ALB 직접 호출·구버전 호환).
 """
+import base64
+import json
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -76,29 +81,79 @@ def _is_public_path(path: str) -> bool:
     return False
 
 
+def _decode_jwt_payload(token: str) -> dict:
+    """검증 없이 JWT 두 번째 세그먼트만 디코드(API Gateway·ALB 앞단에서 이미 검증된 경우)."""
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload_b64 = parts[1]
+        pad = "=" * (-len(payload_b64) % 4)
+        raw = base64.urlsafe_b64decode(payload_b64 + pad)
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _identity_from_request(request: Request) -> Tuple[str, str, str]:
+    """
+    x-cognito-* 헤더와 Authorization Bearer JWT 를 합쳐 sub, email, name 을 만든다.
+    헤더가 우선이며, 비어 있으면 Bearer IdToken 페이로드에서 채운다.
+    """
+    h_sub = (request.headers.get("x-cognito-sub") or "").strip()
+    h_email = (request.headers.get("x-cognito-email") or "").strip()
+    h_name = (request.headers.get("x-cognito-name") or "").strip()
+
+    claims: dict = {}
+    auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        tok = auth[7:].strip()
+        if tok:
+            claims = _decode_jwt_payload(tok)
+
+    c_sub = str(claims.get("sub") or "").strip()
+    c_email = str(claims.get("email") or "").strip()
+    c_name = str(claims.get("name") or "").strip()
+
+    sub = h_sub or c_sub
+    email = h_email or c_email
+    name = h_name or c_name
+    return sub, email, name
+
+
 def _resolve_user_id(cognito_sub: str, email: str, name: str) -> Optional[int]:
     """
     cognito_sub로 users 테이블에서 user_id 조회.
-    없으면 INSERT 후 다시 SELECT. 있는데 email 이 비어있으면 1회만 Cognito claim 으로 채움.
+    없으면 INSERT 후 다시 SELECT.
+    기존 행에서 email/name 이 비어 있으면 Cognito claim 으로 1회만 채움(사용자가 수정한 값은 덮어쓰지 않음).
     """
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT user_id, email FROM users WHERE cognito_sub = %s",
+                "SELECT user_id, email, name FROM users WHERE cognito_sub = %s",
                 (cognito_sub,),
             )
             row = cur.fetchone()
             if row:
-                # 기존 행의 email 이 비어있고 Cognito claim 에 email 이 있으면 1회 채움.
-                # DB name 은 사용자가 edit 폼으로 변경하는 master 라 덮어쓰지 않음.
+                uid = int(row["user_id"])
+                updated = False
                 if email and not (row.get("email") or "").strip():
                     cur.execute(
                         "UPDATE users SET email = %s WHERE user_id = %s AND (email IS NULL OR email = '')",
-                        (email, int(row["user_id"])),
+                        (email, uid),
                     )
+                    updated = True
+                if name and not (row.get("name") or "").strip():
+                    cur.execute(
+                        "UPDATE users SET name = %s WHERE user_id = %s AND (name IS NULL OR name = '')",
+                        (name, uid),
+                    )
+                    updated = True
+                if updated:
                     conn.commit()
-                return int(row["user_id"])
+                return uid
 
             # 신규 사용자: INSERT IGNORE (race condition 대비)
             cur.execute(
@@ -141,15 +196,12 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
         if _is_public_path(path):
             return await call_next(request)
 
-        cognito_sub = (request.headers.get("x-cognito-sub") or "").strip()
+        cognito_sub, email, name = _identity_from_request(request)
         if not cognito_sub:
             return JSONResponse(
                 status_code=401,
-                content={"message": "인증이 필요합니다. (x-cognito-sub 헤더 누락)"},
+                content={"message": "인증이 필요합니다. (사용자 식별 정보 없음)"},
             )
-
-        email = (request.headers.get("x-cognito-email") or "").strip()
-        name = (request.headers.get("x-cognito-name") or "").strip()
 
         user_id = _resolve_user_id(cognito_sub, email, name)
         if user_id is None:

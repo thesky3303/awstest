@@ -271,8 +271,10 @@
             // - id_token refresh 시 name claim 이 빠지는 케이스 대비
             // - 마이페이지 phone 수정 결과가 즉시 헤더/상태에 반영되도록
             const patch = { user_id: me.user.user_id };
-            if (me.user.name)  patch.name  = me.user.name;
-            if (me.user.email) patch.email = me.user.email;
+            const dbName = me.user.name && String(me.user.name).trim();
+            const dbEmail = me.user.email && String(me.user.email).trim();
+            patch.name = dbName || userInfo.name || '';
+            patch.email = dbEmail || userInfo.email || email;
             if (me.user.phone) patch.phone = me.user.phone;
             runtime.patchLoginUser(patch);
           }

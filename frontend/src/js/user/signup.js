@@ -219,8 +219,10 @@
               const me = await runtime.getJson('/api/read/auth/me');
               if (me && me.user && me.user.user_id) {
                 const patch = { user_id: me.user.user_id };
-                if (me.user.name)  patch.name  = me.user.name;
-                if (me.user.email) patch.email = me.user.email;
+                const dbName = me.user.name && String(me.user.name).trim();
+                const dbEmail = me.user.email && String(me.user.email).trim();
+                patch.name = dbName || userInfo.name || name;
+                patch.email = dbEmail || userInfo.email || email;
                 runtime.patchLoginUser(patch);
               }
             } catch (meErr) {

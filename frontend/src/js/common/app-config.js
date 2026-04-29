@@ -373,7 +373,7 @@
    * __TICKETING_API_ORIGIN__ 에 GW/ALB 베이스 URL만 넣고, GW에서 CORS를 S3 웹 오리진에 맞게 열어 주면 됨.
    * (CloudFront에서 애먹었던 케이스는 보통 경로 프록시·이중 CORS·쿠키 도메인 불일치 쪽.)
    *
-   * Cognito: window.__TICKETING_AUTH_BEARER_TOKEN__ 에 access token 넣으면 requestJson이 Authorization 자동 첨부(비어 있으면 무변화).
+   * Cognito: window.__TICKETING_AUTH_BEARER_TOKEN__ 에 IdToken 넣으면 requestJson이 Authorization 자동 첨부(API GW claims.email/name 매핑 및 WAS JWT 보강용).
    */
   async function ensureTicketingEndpointsLoaded() {
     if (ticketingEndpointsLoadPromise) {
