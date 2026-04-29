@@ -11,6 +11,8 @@ data:
   REDIS_PORT: "6379"
   # R/O 리플리카 도입 전까지 false. true + Secret 의 DB_READER_HOST 분리 시에만 리더 접속.
   DB_READ_REPLICA_ENABLED: "false"
+  # 비밀번호 찾기(이름+이메일) 시 AdminSetUserPassword. Terraform Cognito user pool id 와 맞출 것. 비어 있으면 복구 API 503.
+  COGNITO_USER_POOL_ID: ""
   # read-api: 시작 직후 Redis 웜업(기존 로컬 systemd 1분×5회와 동일 취지). CACHE_ENABLED=false면 무시.
   CACHE_ENABLED: "true"
   CACHE_WARMUP_ENABLED: "true"

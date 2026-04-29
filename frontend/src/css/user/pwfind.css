@@ -91,3 +91,23 @@
   line-height: 1.5;
   color: #5e7094;
 }
+
+.pwfind-skip-banner {
+  margin-bottom: 22px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: #e8f4ea;
+  border: 1px solid #8bc48b;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1f5c28;
+  text-align: center;
+  line-height: 1.45;
+}
+
+.pwfind-reset-common-error {
+  min-height: 22px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #ff3b30;
+}

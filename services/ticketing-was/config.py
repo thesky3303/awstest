@@ -126,6 +126,8 @@ AUTH_MODE = os.getenv("AUTH_MODE", "legacy").strip().lower()
 COGNITO_ISSUER = os.getenv("COGNITO_ISSUER", "").strip()
 COGNITO_JWKS_URI = os.getenv("COGNITO_JWKS_URI", "").strip()
 COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID", "").strip()
+# 비밀번호 찾기(이름+이메일 일치 시 AdminSetUserPassword) — IRSA 에 cognito-idp:AdminSetUserPassword 필요
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID", "").strip()
 
 # ── SQS ──────────────────────────────────────────────────────────────────────
 AWS_REGION    = os.getenv("AWS_REGION", "")

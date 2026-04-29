@@ -13,6 +13,8 @@ from db import get_db_connection
 
 router = APIRouter()
 
+_GENERIC_MISMATCH = "입력하신 정보와 일치하는 계정을 찾을 수 없습니다."
+
 
 @router.post("/api/write/auth/edit")
 def auth_edit_user(request: Request, payload: Optional[Dict[str, Any]] = Body(default=None)):
@@ -43,3 +45,88 @@ def auth_edit_user(request: Request, payload: Optional[Dict[str, Any]] = Body(de
         return {"message": "edit success", "success": True}
     finally:
         conn.close()
+
+
+@router.post("/api/write/auth/recover-reset")
+def auth_recover_reset(payload: Optional[Dict[str, Any]] = Body(default=None)):
+    """이름·이메일이 DB 와 일치하면 Cognito 비밀번호를 직접 설정(이메일 인증 생략). 인증 불필요."""
+    from config import AWS_REGION, COGNITO_USER_POOL_ID
+
+    if not COGNITO_USER_POOL_ID:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": "비밀번호 복구 서비스를 사용할 수 없습니다. 관리자에게 문의하세요.",
+            },
+        )
+
+    data = payload or {}
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    new_password = data.get("new_password") or data.get("newPassword") or ""
+    if isinstance(new_password, str):
+        new_password = new_password.strip()
+    else:
+        new_password = ""
+
+    if not name or not email or not new_password:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": "이름, 이메일, 새 비밀번호를 모두 입력해 주세요."},
+        )
+    if len(new_password) < 8:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": "비밀번호는 8자 이상이어야 합니다."},
+        )
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id FROM users
+                WHERE LOWER(TRIM(COALESCE(email, ''))) = %s
+                  AND TRIM(COALESCE(name, '')) = %s
+                  AND cognito_sub IS NOT NULL
+                  AND TRIM(cognito_sub) != ''
+                LIMIT 1
+                """,
+                (email, name),
+            )
+            if not cur.fetchone():
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "message": _GENERIC_MISMATCH},
+                )
+    finally:
+        conn.close()
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    try:
+        client = boto3.client("cognito-idp", region_name=AWS_REGION or "ap-northeast-2")
+        client.admin_set_user_password(
+            UserPoolId=COGNITO_USER_POOL_ID,
+            Username=email,
+            Password=new_password,
+            Permanent=True,
+        )
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code == "UserNotFoundException":
+            return JSONResponse(
+                status_code=404,
+                content={"success": False, "message": _GENERIC_MISMATCH},
+            )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": "비밀번호 변경에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+            },
+        )
+
+    return {"success": True, "message": "비밀번호가 변경되었습니다."}

@@ -66,6 +66,8 @@ PUBLIC_EXACT_PATHS = {
     "/api/write/health",
     "/docs",
     "/openapi.json",
+    "/api/read/auth/recover-verify",
+    "/api/write/auth/recover-reset",
 }
 
 

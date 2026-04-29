@@ -1,6 +1,8 @@
 (function () {
   const LOGIN_CSS_PATH = '/css/user/login.css';
   const PWFIND_CSS_PATH = '/css/user/pwfind.css';
+  const VERIFY_API = '/api/read/auth/recover-verify';
+  const RESET_API = '/api/write/auth/recover-reset';
   const runtime = window.APP_RUNTIME || {};
 
   function ensureModalCss() {
@@ -54,38 +56,7 @@
     return String(password || '').trim().length >= 8;
   }
 
-  function cognitoForgotErrorMessage(error) {
-    var code = String(error.code || error.__type || '');
-    if (code.indexOf('UserNotFoundException') !== -1 || code.indexOf('ResourceNotFoundException') !== -1) {
-      return '등록되지 않은 이메일입니다.';
-    }
-    if (code.indexOf('InvalidParameterException') !== -1) {
-      return '이메일 형식을 확인해 주세요.';
-    }
-    if (code.indexOf('LimitExceededException') !== -1 || code.indexOf('TooManyRequestsException') !== -1) {
-      return '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.';
-    }
-    return error.message || '인증코드 발송에 실패했습니다.';
-  }
-
-  function cognitoConfirmErrorMessage(error) {
-    var code = String(error.code || error.__type || '');
-    if (code.indexOf('CodeMismatchException') !== -1) {
-      return '인증번호가 올바르지 않습니다.';
-    }
-    if (code.indexOf('ExpiredCodeException') !== -1) {
-      return '인증번호가 만료되었습니다. 처음부터 다시 시도해 주세요.';
-    }
-    if (code.indexOf('InvalidPasswordException') !== -1) {
-      return '새 비밀번호 형식이 정책에 맞지 않습니다. (8자 이상, 대·소문자·숫자 등)';
-    }
-    if (code.indexOf('UserNotFoundException') !== -1) {
-      return '사용자를 찾을 수 없습니다.';
-    }
-    return error.message || '비밀번호 변경에 실패했습니다.';
-  }
-
-  function buildEmailHtml() {
+  function buildModalHtml() {
     const overlay = document.createElement('div');
     overlay.id = 'login-modal-overlay';
     overlay.className = 'login-modal-overlay';
@@ -96,10 +67,14 @@
 
         <div class="login-modal-header pwfind-header">
           <h2 id="pwfind-modal-title" class="login-modal-title">PW 찾기</h2>
-          <p class="login-modal-subtitle">가입 시 사용한 이메일을 입력해 주세요. 인증번호가 메일로 발송됩니다.</p>
+          <p class="login-modal-subtitle pwfind-step-verify-sub">가입 시 사용한 이름과 이메일을 입력해 주세요.</p>
         </div>
 
-        <form class="pwfind-form pwfind-email-form" novalidate>
+        <form class="pwfind-form pwfind-verify-form" novalidate>
+          <div class="pwfind-form-group">
+            <input type="text" name="name" class="login-input pwfind-input" placeholder="이름" autocomplete="name" />
+            <div class="pwfind-field-error" data-error-for="name"></div>
+          </div>
           <div class="pwfind-form-group">
             <input type="email" name="email" class="login-input pwfind-input" placeholder="이메일" autocomplete="email" />
             <div class="pwfind-field-error" data-error-for="email"></div>
@@ -108,125 +83,62 @@
           <div class="pwfind-common-error"></div>
 
           <div class="pwfind-button-row">
-            <button type="submit" class="login-submit-button pwfind-submit-button">인증번호 받기</button>
+            <button type="submit" class="login-submit-button pwfind-submit-button pwfind-verify-submit">확인</button>
             <button type="button" class="pwfind-cancel-button">취소</button>
           </div>
         </form>
-      </div>
-    `;
 
-    return overlay;
-  }
+        <div class="pwfind-step-reset" hidden>
+          <div class="pwfind-skip-banner" role="status"></div>
 
-  function buildConfirmHtml() {
-    const overlay = document.createElement('div');
-    overlay.id = 'login-modal-overlay';
-    overlay.className = 'login-modal-overlay';
+          <form class="pwfind-form pwfind-reset-form" novalidate>
+            <div class="pwfind-form-group">
+              <input type="password" name="password" class="login-input pwfind-input" placeholder="새 비밀번호" autocomplete="new-password" />
+              <div class="pwfind-field-error" data-error-for="password"></div>
+            </div>
 
-    overlay.innerHTML = `
-      <div class="login-modal pwfind-modal" role="dialog" aria-modal="true" aria-labelledby="pwreset-modal-title">
-        <button type="button" class="login-modal-close" aria-label="닫기">×</button>
+            <div class="pwfind-form-group">
+              <input type="password" name="password_confirm" class="login-input pwfind-input" placeholder="새 비밀번호 확인" autocomplete="new-password" />
+              <div class="pwfind-field-error" data-error-for="password_confirm"></div>
+            </div>
 
-        <div class="login-modal-header pwfind-header">
-          <h2 id="pwreset-modal-title" class="login-modal-title">PW 찾기</h2>
-          <p class="login-modal-subtitle">이메일로 받은 인증번호와 새 비밀번호를 입력해 주세요.</p>
+            <div class="pwfind-common-error pwfind-reset-common-error"></div>
+
+            <div class="pwfind-button-row">
+              <button type="submit" class="login-submit-button pwfind-submit-button">비밀번호 변경</button>
+              <button type="button" class="pwfind-cancel-button">취소</button>
+            </div>
+          </form>
         </div>
-
-        <form class="pwfind-form pwfind-confirm-form" novalidate>
-          <div class="pwfind-form-group">
-            <input type="text" name="code" class="login-input pwfind-input" placeholder="인증번호" inputmode="numeric" autocomplete="one-time-code" />
-            <div class="pwfind-field-error" data-error-for="code"></div>
-          </div>
-
-          <div class="pwfind-form-group">
-            <input type="password" name="password" class="login-input pwfind-input" placeholder="새 비밀번호" autocomplete="new-password" />
-            <div class="pwfind-field-error" data-error-for="password"></div>
-          </div>
-
-          <div class="pwfind-form-group">
-            <input type="password" name="password_confirm" class="login-input pwfind-input" placeholder="새 비밀번호 확인" autocomplete="new-password" />
-            <div class="pwfind-field-error" data-error-for="password_confirm"></div>
-          </div>
-
-          <div class="pwfind-common-error"></div>
-
-          <div class="pwfind-button-row">
-            <button type="submit" class="login-submit-button pwfind-submit-button">비밀번호 변경</button>
-            <button type="button" class="pwfind-cancel-button">취소</button>
-          </div>
-        </form>
       </div>
     `;
 
     return overlay;
   }
 
-  function bindEmailEvents(overlay) {
-    const closeButton = overlay.querySelector('.login-modal-close');
-    const cancelButton = overlay.querySelector('.pwfind-cancel-button');
-    const form = overlay.querySelector('.pwfind-email-form');
-    const emailInput = form.querySelector('input[name="email"]');
-    const submitButton = form.querySelector('.pwfind-submit-button');
-    let isSubmitting = false;
-
-    overlay.addEventListener('click', function (event) {
-      if (event.target === overlay) {
-        closePwFindPage();
-      }
-    });
-
-    closeButton.addEventListener('click', closePwFindPage);
-    cancelButton.addEventListener('click', goToLoginPage);
-
-    emailInput.addEventListener('input', function () {
-      clearErrors(overlay);
-    });
-
-    form.addEventListener('submit', async function (event) {
-      event.preventDefault();
-      if (isSubmitting) return;
-
-      clearErrors(overlay);
-
-      const email = emailInput.value.trim();
-      if (!isValidEmail(email)) {
-        setFieldError(overlay, 'email', '올바른 이메일을 입력해 주세요.');
-        return;
-      }
-
-      if (!window.CognitoAuth || typeof window.CognitoAuth.forgotPassword !== 'function') {
-        setCommonError(overlay, '인증 모듈을 불러오지 못했습니다. 페이지를 새로고침 후 다시 시도해 주세요.');
-        return;
-      }
-
-      isSubmitting = true;
-      submitButton.disabled = true;
-      submitButton.textContent = '발송 중...';
-
-      try {
-        await window.CognitoAuth.forgotPassword(email);
-        closePwFindPage();
-        openConfirmPage(email);
-      } catch (error) {
-        console.error('[pwfind] forgotPassword:', error);
-        setCommonError(overlay, cognitoForgotErrorMessage(error));
-      } finally {
-        isSubmitting = false;
-        submitButton.disabled = false;
-        submitButton.textContent = '인증번호 받기';
-      }
-    });
+  function setResetCommonError(overlay, message) {
+    const target = overlay.querySelector('.pwfind-reset-common-error');
+    if (target) target.textContent = message || '';
   }
 
-  function bindConfirmEvents(overlay, email) {
+  function bindEvents(overlay) {
     const closeButton = overlay.querySelector('.login-modal-close');
-    const cancelButton = overlay.querySelector('.pwfind-cancel-button');
-    const form = overlay.querySelector('.pwfind-confirm-form');
-    const codeInput = form.querySelector('input[name="code"]');
-    const passwordInput = form.querySelector('input[name="password"]');
-    const passwordConfirmInput = form.querySelector('input[name="password_confirm"]');
-    const submitButton = form.querySelector('.pwfind-submit-button');
-    let isSubmitting = false;
+    const cancelButtons = overlay.querySelectorAll('.pwfind-cancel-button');
+    const verifyForm = overlay.querySelector('.pwfind-verify-form');
+    const resetForm = overlay.querySelector('.pwfind-reset-form');
+    const stepReset = overlay.querySelector('.pwfind-step-reset');
+    const skipBanner = overlay.querySelector('.pwfind-skip-banner');
+    const nameInput = verifyForm.querySelector('input[name="name"]');
+    const emailInput = verifyForm.querySelector('input[name="email"]');
+    const verifySubmit = verifyForm.querySelector('.pwfind-verify-submit');
+    const passwordInput = resetForm.querySelector('input[name="password"]');
+    const passwordConfirmInput = resetForm.querySelector('input[name="password_confirm"]');
+    const resetSubmit = resetForm.querySelector('.pwfind-submit-button');
+
+    let verifiedName = '';
+    let verifiedEmail = '';
+    let verifySubmitting = false;
+    let resetSubmitting = false;
 
     overlay.addEventListener('click', function (event) {
       if (event.target === overlay) {
@@ -235,29 +147,92 @@
     });
 
     closeButton.addEventListener('click', closePwFindPage);
-    cancelButton.addEventListener('click', goToLoginPage);
+    cancelButtons.forEach(function (btn) {
+      btn.addEventListener('click', goToLoginPage);
+    });
 
-    [codeInput, passwordInput, passwordConfirmInput].forEach((input) => {
+    [nameInput, emailInput].forEach(function (input) {
       input.addEventListener('input', function () {
         clearErrors(overlay);
       });
     });
 
-    form.addEventListener('submit', async function (event) {
+    [passwordInput, passwordConfirmInput].forEach(function (input) {
+      input.addEventListener('input', function () {
+        resetForm.querySelectorAll('.pwfind-field-error').forEach(function (n) {
+          n.textContent = '';
+        });
+        setResetCommonError(overlay, '');
+      });
+    });
+
+    verifyForm.addEventListener('submit', async function (event) {
       event.preventDefault();
-      if (isSubmitting) return;
+      if (verifySubmitting) return;
 
       clearErrors(overlay);
 
-      const code = codeInput.value.trim();
+      const name = nameInput.value.trim();
+      const email = emailInput.value.trim();
+      let hasError = false;
+      if (!name) {
+        setFieldError(overlay, 'name', '이름을 입력해 주세요.');
+        hasError = true;
+      }
+      if (!isValidEmail(email)) {
+        setFieldError(overlay, 'email', '올바른 이메일을 입력해 주세요.');
+        hasError = true;
+      }
+      if (hasError) return;
+
+      if (typeof runtime.postJson !== 'function') {
+        setCommonError(overlay, '요청을 보낼 수 없습니다. 페이지를 새로고침 후 다시 시도해 주세요.');
+        return;
+      }
+
+      verifySubmitting = true;
+      verifySubmit.disabled = true;
+      verifySubmit.textContent = '확인 중...';
+
+      try {
+        const result = await runtime.postJson(VERIFY_API, { name: name, email: email });
+        verifiedName = name;
+        verifiedEmail = email;
+        const msg =
+          (result && result.message) || '이메일 인증 과정 생략';
+        if (skipBanner) skipBanner.textContent = msg;
+        verifyForm.hidden = true;
+        overlay.querySelector('.pwfind-step-verify-sub').hidden = true;
+        stepReset.hidden = false;
+        requestAnimationFrame(function () {
+          passwordInput.focus();
+        });
+      } catch (error) {
+        console.error('[pwfind] recover-verify:', error);
+        const msg =
+          error && error.message
+            ? error.message
+            : '입력하신 정보와 일치하는 계정을 찾을 수 없습니다.';
+        setCommonError(overlay, msg);
+      } finally {
+        verifySubmitting = false;
+        verifySubmit.disabled = false;
+        verifySubmit.textContent = '확인';
+      }
+    });
+
+    resetForm.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      if (resetSubmitting) return;
+
+      resetForm.querySelectorAll('.pwfind-field-error').forEach(function (n) {
+        n.textContent = '';
+      });
+      setResetCommonError(overlay, '');
+
       const password = passwordInput.value;
       const passwordConfirm = passwordConfirmInput.value;
       let hasError = false;
-
-      if (!code) {
-        setFieldError(overlay, 'code', '인증번호를 입력해 주세요.');
-        hasError = true;
-      }
       if (!isValidPassword(password)) {
         setFieldError(overlay, 'password', '새 비밀번호는 8자 이상 입력해 주세요.');
         hasError = true;
@@ -268,39 +243,36 @@
       }
       if (hasError) return;
 
-      if (!window.CognitoAuth || typeof window.CognitoAuth.confirmForgotPassword !== 'function') {
-        setCommonError(overlay, '인증 모듈을 불러오지 못했습니다.');
+      if (typeof runtime.postJson !== 'function') {
+        setResetCommonError(overlay, '요청을 보낼 수 없습니다. 페이지를 새로고침 후 다시 시도해 주세요.');
         return;
       }
 
-      isSubmitting = true;
-      submitButton.disabled = true;
-      submitButton.textContent = '변경 중...';
+      resetSubmitting = true;
+      resetSubmit.disabled = true;
+      resetSubmit.textContent = '변경 중...';
 
       try {
-        await window.CognitoAuth.confirmForgotPassword(email, code, password);
+        await runtime.postJson(RESET_API, {
+          name: verifiedName,
+          email: verifiedEmail,
+          new_password: password
+        });
         alert('비밀번호가 변경되었습니다.');
         goToLoginPage();
       } catch (error) {
-        console.error('[pwfind] confirmForgotPassword:', error);
-        setCommonError(overlay, cognitoConfirmErrorMessage(error));
+        console.error('[pwfind] recover-reset:', error);
+        const msg =
+          error && error.message
+            ? error.message
+            : '비밀번호 변경에 실패했습니다.';
+        setResetCommonError(overlay, msg);
       } finally {
-        isSubmitting = false;
-        submitButton.disabled = false;
-        submitButton.textContent = '비밀번호 변경';
+        resetSubmitting = false;
+        resetSubmit.disabled = false;
+        resetSubmit.textContent = '비밀번호 변경';
       }
     });
-  }
-
-  function openConfirmPage(email) {
-    const overlay = buildConfirmHtml();
-    runtime.lockBodyScroll();
-    document.body.appendChild(overlay);
-    bindConfirmEvents(overlay, email);
-    const codeInput = overlay.querySelector('input[name="code"]');
-    if (codeInput) {
-      requestAnimationFrame(() => codeInput.focus());
-    }
   }
 
   async function openPwFindPage() {
@@ -314,14 +286,16 @@
       console.error('[pwfind] css load error:', error);
     }
 
-    const overlay = buildEmailHtml();
+    const overlay = buildModalHtml();
     runtime.lockBodyScroll();
     document.body.appendChild(overlay);
-    bindEmailEvents(overlay);
+    bindEvents(overlay);
 
-    const firstInput = overlay.querySelector('input[name="email"]');
+    const firstInput = overlay.querySelector('input[name="name"]');
     if (firstInput) {
-      requestAnimationFrame(() => firstInput.focus());
+      requestAnimationFrame(function () {
+        firstInput.focus();
+      });
     }
   }
 
