@@ -1,8 +1,6 @@
 (function () {
   const LOGIN_CSS_PATH = '/css/user/login.css';
   const PWFIND_CSS_PATH = '/css/user/pwfind.css';
-  const FIND_PASSWORD_API = '/api/read/auth/find-password';
-  const RESET_PASSWORD_API = '/api/write/auth/reset-password';
   const runtime = window.APP_RUNTIME || {};
 
   function ensureModalCss() {
@@ -48,95 +46,46 @@
     setCommonError(modal, '');
   }
 
-  function onlyDigits(value) {
-    return String(value || '').replace(/\D/g, '');
-  }
-
-  function sanitizeName(value) {
-    return String(value || '').replace(/[^가-힣a-zA-Z\s]/g, '');
-  }
-
-  function isValidPhone(phone) {
-    return /^01[016789]\d{7,8}$/.test(String(phone || '').trim());
-  }
-
-  function isValidName(name) {
-    return /^[가-힣a-zA-Z\s]{2,20}$/.test(String(name || '').trim());
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
   }
 
   function isValidPassword(password) {
-    return String(password || '').trim().length >= 4;
+    return String(password || '').trim().length >= 8;
   }
 
-  function formatJoinDate(value) {
-    if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return String(value).slice(0, 10).replaceAll('-', '.');
+  function cognitoForgotErrorMessage(error) {
+    var code = String(error.code || error.__type || '');
+    if (code.indexOf('UserNotFoundException') !== -1 || code.indexOf('ResourceNotFoundException') !== -1) {
+      return '등록되지 않은 이메일입니다.';
     }
-
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}.${m}.${d}`;
-  }
-
-  async function requestFindUser(phone, name) {
-    try {
-      return await runtime.postJson(FIND_PASSWORD_API, { phone, name });
-    } catch (error) {
-      return {
-        success: false,
-        message: error.message || '서버에 연결할 수 없습니다.'
-      };
+    if (code.indexOf('InvalidParameterException') !== -1) {
+      return '이메일 형식을 확인해 주세요.';
     }
-  }
-
-  async function requestResetPassword(phone, name, password) {
-    try {
-      return await runtime.postJson(RESET_PASSWORD_API, { phone, name, password });
-    } catch (error) {
-      return {
-        success: false,
-        message: error.message || '서버에 연결할 수 없습니다.'
-      };
+    if (code.indexOf('LimitExceededException') !== -1 || code.indexOf('TooManyRequestsException') !== -1) {
+      return '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.';
     }
+    return error.message || '인증코드 발송에 실패했습니다.';
   }
 
-  function normalizeFindResult(result, phone, name) {
-    const user = result.user || result.data || result.result || null;
-    const matchedPhone =
-      result.matched_phone === true ||
-      result.phone_match === true ||
-      result.phoneMatched === true ||
-      result.is_phone_match === true ||
-      (user && String(user.phone || '') === String(phone));
-
-    const matchedName =
-      result.matched_name === true ||
-      result.name_match === true ||
-      result.nameMatched === true ||
-      result.is_name_match === true ||
-      (user && String(user.name || '').trim() === String(name).trim());
-
-    const success =
-      result.success === true ||
-      result.exists === true ||
-      result.found === true ||
-      result.matched === true ||
-      result.both_matched === true ||
-      !!user;
-
-    return {
-      success,
-      matchedPhone,
-      matchedName,
-      user: success ? (user || { phone, name }) : null,
-      message: result.message || ''
-    };
+  function cognitoConfirmErrorMessage(error) {
+    var code = String(error.code || error.__type || '');
+    if (code.indexOf('CodeMismatchException') !== -1) {
+      return '인증번호가 올바르지 않습니다.';
+    }
+    if (code.indexOf('ExpiredCodeException') !== -1) {
+      return '인증번호가 만료되었습니다. 처음부터 다시 시도해 주세요.';
+    }
+    if (code.indexOf('InvalidPasswordException') !== -1) {
+      return '새 비밀번호 형식이 정책에 맞지 않습니다. (8자 이상, 대·소문자·숫자 등)';
+    }
+    if (code.indexOf('UserNotFoundException') !== -1) {
+      return '사용자를 찾을 수 없습니다.';
+    }
+    return error.message || '비밀번호 변경에 실패했습니다.';
   }
 
-  function buildVerifyHtml() {
+  function buildEmailHtml() {
     const overlay = document.createElement('div');
     overlay.id = 'login-modal-overlay';
     overlay.className = 'login-modal-overlay';
@@ -147,24 +96,19 @@
 
         <div class="login-modal-header pwfind-header">
           <h2 id="pwfind-modal-title" class="login-modal-title">PW 찾기</h2>
-          <p class="login-modal-subtitle">핸드폰번호와 이름을 입력해 주세요.</p>
+          <p class="login-modal-subtitle">가입 시 사용한 이메일을 입력해 주세요. 인증번호가 메일로 발송됩니다.</p>
         </div>
 
-        <form class="pwfind-form pwfind-verify-form" novalidate>
+        <form class="pwfind-form pwfind-email-form" novalidate>
           <div class="pwfind-form-group">
-            <input type="text" name="phone" class="login-input pwfind-input" placeholder="핸드폰번호" inputmode="numeric" maxlength="11" />
-            <div class="pwfind-field-error" data-error-for="phone"></div>
-          </div>
-
-          <div class="pwfind-form-group">
-            <input type="text" name="name" class="login-input pwfind-input" placeholder="이름" maxlength="20" />
-            <div class="pwfind-field-error" data-error-for="name"></div>
+            <input type="email" name="email" class="login-input pwfind-input" placeholder="이메일" autocomplete="email" />
+            <div class="pwfind-field-error" data-error-for="email"></div>
           </div>
 
           <div class="pwfind-common-error"></div>
 
           <div class="pwfind-button-row">
-            <button type="submit" class="login-submit-button pwfind-submit-button">확인</button>
+            <button type="submit" class="login-submit-button pwfind-submit-button">인증번호 받기</button>
             <button type="button" class="pwfind-cancel-button">취소</button>
           </div>
         </form>
@@ -174,7 +118,7 @@
     return overlay;
   }
 
-  function buildResetHtml(user) {
+  function buildConfirmHtml() {
     const overlay = document.createElement('div');
     overlay.id = 'login-modal-overlay';
     overlay.className = 'login-modal-overlay';
@@ -185,32 +129,29 @@
 
         <div class="login-modal-header pwfind-header">
           <h2 id="pwreset-modal-title" class="login-modal-title">PW 찾기</h2>
-          <p class="login-modal-subtitle">가입 정보가 확인되었습니다.</p>
+          <p class="login-modal-subtitle">이메일로 받은 인증번호와 새 비밀번호를 입력해 주세요.</p>
         </div>
 
-        <div class="pwfind-found-user-box">
-          <div class="pwfind-found-user-date">${formatJoinDate(user.created_at)}</div>
-          <div class="pwfind-found-user-text">위 날짜에 가입한 정보가 있습니다.</div>
-        </div>
-
-        <form class="pwfind-form pwfind-reset-form" novalidate>
-          <input type="hidden" name="phone" value="${user.phone || ''}">
-          <input type="hidden" name="name" value="${user.name || ''}">
+        <form class="pwfind-form pwfind-confirm-form" novalidate>
+          <div class="pwfind-form-group">
+            <input type="text" name="code" class="login-input pwfind-input" placeholder="인증번호" inputmode="numeric" autocomplete="one-time-code" />
+            <div class="pwfind-field-error" data-error-for="code"></div>
+          </div>
 
           <div class="pwfind-form-group">
-            <input type="password" name="password" class="login-input pwfind-input" placeholder="비밀번호 변경" />
+            <input type="password" name="password" class="login-input pwfind-input" placeholder="새 비밀번호" autocomplete="new-password" />
             <div class="pwfind-field-error" data-error-for="password"></div>
           </div>
 
           <div class="pwfind-form-group">
-            <input type="password" name="password_confirm" class="login-input pwfind-input" placeholder="비밀번호 확인" />
+            <input type="password" name="password_confirm" class="login-input pwfind-input" placeholder="새 비밀번호 확인" autocomplete="new-password" />
             <div class="pwfind-field-error" data-error-for="password_confirm"></div>
           </div>
 
           <div class="pwfind-common-error"></div>
 
           <div class="pwfind-button-row">
-            <button type="submit" class="login-submit-button pwfind-submit-button">확인</button>
+            <button type="submit" class="login-submit-button pwfind-submit-button">비밀번호 변경</button>
             <button type="button" class="pwfind-cancel-button">취소</button>
           </div>
         </form>
@@ -220,15 +161,13 @@
     return overlay;
   }
 
-  function bindVerifyEvents(overlay) {
+  function bindEmailEvents(overlay) {
     const closeButton = overlay.querySelector('.login-modal-close');
     const cancelButton = overlay.querySelector('.pwfind-cancel-button');
-    const form = overlay.querySelector('.pwfind-verify-form');
-    const phoneInput = form.querySelector('input[name="phone"]');
-    const nameInput = form.querySelector('input[name="name"]');
+    const form = overlay.querySelector('.pwfind-email-form');
+    const emailInput = form.querySelector('input[name="email"]');
     const submitButton = form.querySelector('.pwfind-submit-button');
     let isSubmitting = false;
-    let isComposingName = false;
 
     overlay.addEventListener('click', function (event) {
       if (event.target === overlay) {
@@ -239,24 +178,7 @@
     closeButton.addEventListener('click', closePwFindPage);
     cancelButton.addEventListener('click', goToLoginPage);
 
-    phoneInput.addEventListener('input', function () {
-      phoneInput.value = onlyDigits(phoneInput.value).slice(0, 11);
-      clearErrors(overlay);
-    });
-
-    nameInput.addEventListener('compositionstart', function () {
-      isComposingName = true;
-    });
-
-    nameInput.addEventListener('compositionend', function () {
-      isComposingName = false;
-      nameInput.value = sanitizeName(nameInput.value);
-    });
-
-    nameInput.addEventListener('input', function () {
-      if (!isComposingName) {
-        nameInput.value = sanitizeName(nameInput.value);
-      }
+    emailInput.addEventListener('input', function () {
       clearErrors(overlay);
     });
 
@@ -266,52 +188,41 @@
 
       clearErrors(overlay);
 
-      const phone = phoneInput.value.trim();
-      const name = nameInput.value.trim();
-      let hasError = false;
+      const email = emailInput.value.trim();
+      if (!isValidEmail(email)) {
+        setFieldError(overlay, 'email', '올바른 이메일을 입력해 주세요.');
+        return;
+      }
 
-      if (!isValidPhone(phone)) {
-        setFieldError(overlay, 'phone', '핸드폰번호를 확인하세요.');
-        hasError = true;
+      if (!window.CognitoAuth || typeof window.CognitoAuth.forgotPassword !== 'function') {
+        setCommonError(overlay, '인증 모듈을 불러오지 못했습니다. 페이지를 새로고침 후 다시 시도해 주세요.');
+        return;
       }
-      if (!isValidName(name)) {
-        setFieldError(overlay, 'name', '이름을 확인하세요.');
-        hasError = true;
-      }
-      if (hasError) return;
 
       isSubmitting = true;
       submitButton.disabled = true;
-      submitButton.textContent = '확인 중...';
+      submitButton.textContent = '발송 중...';
 
       try {
-        const result = normalizeFindResult(await requestFindUser(phone, name), phone, name);
-        if (!result.success || !result.user) {
-          if (!result.matchedPhone) {
-            setFieldError(overlay, 'phone', '가입된 핸드폰번호가 없습니다.');
-          }
-          if (!result.matchedName) {
-            setFieldError(overlay, 'name', '가입된 이름이 없습니다.');
-          }
-          if (result.matchedPhone && result.matchedName) {
-            setCommonError(overlay, result.message || '가입 정보를 찾을 수 없습니다.');
-          }
-          return;
-        }
-
-        openPwResetPage(result.user);
+        await window.CognitoAuth.forgotPassword(email);
+        closePwFindPage();
+        openConfirmPage(email);
+      } catch (error) {
+        console.error('[pwfind] forgotPassword:', error);
+        setCommonError(overlay, cognitoForgotErrorMessage(error));
       } finally {
         isSubmitting = false;
         submitButton.disabled = false;
-        submitButton.textContent = '확인';
+        submitButton.textContent = '인증번호 받기';
       }
     });
   }
 
-  function bindResetEvents(overlay) {
+  function bindConfirmEvents(overlay, email) {
     const closeButton = overlay.querySelector('.login-modal-close');
     const cancelButton = overlay.querySelector('.pwfind-cancel-button');
-    const form = overlay.querySelector('.pwfind-reset-form');
+    const form = overlay.querySelector('.pwfind-confirm-form');
+    const codeInput = form.querySelector('input[name="code"]');
     const passwordInput = form.querySelector('input[name="password"]');
     const passwordConfirmInput = form.querySelector('input[name="password_confirm"]');
     const submitButton = form.querySelector('.pwfind-submit-button');
@@ -326,7 +237,7 @@
     closeButton.addEventListener('click', closePwFindPage);
     cancelButton.addEventListener('click', goToLoginPage);
 
-    [passwordInput, passwordConfirmInput].forEach((input) => {
+    [codeInput, passwordInput, passwordConfirmInput].forEach((input) => {
       input.addEventListener('input', function () {
         clearErrors(overlay);
       });
@@ -338,14 +249,17 @@
 
       clearErrors(overlay);
 
-      const phone = form.querySelector('input[name="phone"]').value.trim();
-      const name = form.querySelector('input[name="name"]').value.trim();
+      const code = codeInput.value.trim();
       const password = passwordInput.value;
       const passwordConfirm = passwordConfirmInput.value;
       let hasError = false;
 
+      if (!code) {
+        setFieldError(overlay, 'code', '인증번호를 입력해 주세요.');
+        hasError = true;
+      }
       if (!isValidPassword(password)) {
-        setFieldError(overlay, 'password', '비밀번호는 4자 이상 입력하세요.');
+        setFieldError(overlay, 'password', '새 비밀번호는 8자 이상 입력해 주세요.');
         hasError = true;
       }
       if (password !== passwordConfirm) {
@@ -354,33 +268,39 @@
       }
       if (hasError) return;
 
+      if (!window.CognitoAuth || typeof window.CognitoAuth.confirmForgotPassword !== 'function') {
+        setCommonError(overlay, '인증 모듈을 불러오지 못했습니다.');
+        return;
+      }
+
       isSubmitting = true;
       submitButton.disabled = true;
       submitButton.textContent = '변경 중...';
 
       try {
-        const result = await requestResetPassword(phone, name, password);
-        if (result.success === false) {
-          setCommonError(overlay, result.message || '비밀번호 변경에 실패했습니다.');
-          return;
-        }
-
+        await window.CognitoAuth.confirmForgotPassword(email, code, password);
         alert('비밀번호가 변경되었습니다.');
         goToLoginPage();
+      } catch (error) {
+        console.error('[pwfind] confirmForgotPassword:', error);
+        setCommonError(overlay, cognitoConfirmErrorMessage(error));
       } finally {
         isSubmitting = false;
         submitButton.disabled = false;
-        submitButton.textContent = '확인';
+        submitButton.textContent = '비밀번호 변경';
       }
     });
   }
 
-  function openPwResetPage(user) {
-    closePwFindPage();
-    const overlay = buildResetHtml(user);
+  function openConfirmPage(email) {
+    const overlay = buildConfirmHtml();
     runtime.lockBodyScroll();
     document.body.appendChild(overlay);
-    bindResetEvents(overlay);
+    bindConfirmEvents(overlay, email);
+    const codeInput = overlay.querySelector('input[name="code"]');
+    if (codeInput) {
+      requestAnimationFrame(() => codeInput.focus());
+    }
   }
 
   async function openPwFindPage() {
@@ -394,12 +314,12 @@
       console.error('[pwfind] css load error:', error);
     }
 
-    const overlay = buildVerifyHtml();
+    const overlay = buildEmailHtml();
     runtime.lockBodyScroll();
     document.body.appendChild(overlay);
-    bindVerifyEvents(overlay);
+    bindEmailEvents(overlay);
 
-    const firstInput = overlay.querySelector('input[name="phone"]');
+    const firstInput = overlay.querySelector('input[name="email"]');
     if (firstInput) {
       requestAnimationFrame(() => firstInput.focus());
     }

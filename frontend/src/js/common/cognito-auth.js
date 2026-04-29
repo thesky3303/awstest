@@ -145,6 +145,28 @@
   /**
    * 비밀번호 변경 — Cognito 공개 API (백엔드 불필요). Access Token 필수.
    */
+  /**
+   * 비밀번호 찾기 1단계 — 등록 이메일로 인증코드 발송(Cognito).
+   */
+  function cognitoForgotPassword(email) {
+    return cognitoFetch('AWSCognitoIdentityProviderService.ForgotPassword', {
+      ClientId: CLIENT_ID,
+      Username: String(email || '').trim()
+    });
+  }
+
+  /**
+   * 비밀번호 찾기 2단계 — 이메일로 받은 코드 + 새 비밀번호 제출.
+   */
+  function cognitoConfirmForgotPassword(email, confirmationCode, newPassword) {
+    return cognitoFetch('AWSCognitoIdentityProviderService.ConfirmForgotPassword', {
+      ClientId: CLIENT_ID,
+      Username: String(email || '').trim(),
+      ConfirmationCode: String(confirmationCode || '').trim(),
+      Password: newPassword
+    });
+  }
+
   function cognitoChangePassword(previousPassword, proposedPassword) {
     var accessToken = getAccessToken();
     if (!accessToken || isTokenExpired(accessToken)) {
@@ -216,6 +238,8 @@
   window.CognitoAuth = {
     signUp:         cognitoSignUp,
     login:          cognitoLogin,
+    forgotPassword:       cognitoForgotPassword,
+    confirmForgotPassword: cognitoConfirmForgotPassword,
     changePassword: cognitoChangePassword,
     refreshToken:   cognitoRefreshToken,
     logout:         cognitoLogout,
