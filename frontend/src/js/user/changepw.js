@@ -198,13 +198,8 @@
       console.error('[changepw] css load error:', error);
     }
 
-    try {
-      if (typeof runtime.ensureScript === 'function') {
-        await runtime.ensureScript('/js/common/cognito-auth.js');
-      }
-    } catch (error) {
-      console.error('[changepw] cognito-auth load error:', error);
-    }
+    // cognito-auth.js 는 index.html 에 항상 포함됨. 여기서 ensureScript 하면
+    // 이미 실행된 defer 스크립트의 load 이벤트를 놓쳐 ensureScript 가 영구 대기할 수 있음.
 
     if (runtime.resetPrimarySections) {
       runtime.resetPrimarySections();

@@ -113,15 +113,29 @@
           return;
         }
 
-        existing.addEventListener('load', () => {
+        let settled = false;
+        const finishOk = () => {
+          if (settled) return;
+          settled = true;
           existing.dataset.loaded = 'true';
           resolve(existing);
-        }, { once: true });
+        };
+
+        existing.addEventListener('load', finishOk, { once: true });
 
         existing.addEventListener('error', () => {
+          if (settled) return;
+          settled = true;
           scriptPromiseMap.delete(src);
           reject(new Error(`script load fail: ${src}`));
         }, { once: true });
+
+        // index.html 등에서 이미 삽입된 defer 스크립트는 load 가 과거에 발생했을 수 있음
+        // (리스너 등록 전에 이미 실행됨) → 영구 대기 방지
+        // interactive 이후면 문서에 있는 defer 스크립트는 보통 이미 실행됨(vs 느린 네트워크는 load 로 처리)
+        if (document.readyState !== 'loading' && existing.hasAttribute && existing.hasAttribute('defer')) {
+          queueMicrotask(finishOk);
+        }
         return;
       }
 
