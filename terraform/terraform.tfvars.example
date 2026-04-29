@@ -18,6 +18,10 @@ cognito_domain_prefix = "myticket-auth-CHANGE-ME"
 # 이 값이 틀리면 GitHub Actions 에서 AWS role assume 실패.
 github_repo = "your-github-id/soldesk"
 
+# (선택) ArgoCD 가 배포할 Git 브랜치·태그. 생략 시 terraform 기본값 "FINAL".
+# 작업 브랜치(teamproject 등)만 쓸 때는 prepare.sh 가 현재 브랜치로 이 줄을 추가함.
+# argocd_target_revision = "teamproject"
+
 # ─── 아래 2줄은 그대로 두세요 — setup-all.sh 가 자동으로 채웁니다 ──
 alb_listener_arn         = ""
 frontend_callback_domain = ""

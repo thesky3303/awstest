@@ -11,10 +11,14 @@ Cognito + API Gateway 인증 미들웨어.
 비는 경우가 많다. 클라이언트는 API 호출 시 Bearer 로 IdToken 을 보내면 Gateway 가 검증한
 claims 에서 email/name 이 채워진다. 헤더가 비었을 때는 Authorization Bearer JWT 페이로드에서
 보강한다(ALB 직접 호출·구버전 호환).
+
+이름·이메일은 JWT 클레임을 헤더보다 우선한다: HTTP 헤더로 한글 등 비 ASCII 이름을 넣으면
+인코딩이 깨지는 경우가 많다(API Gateway→프록시). JWT 페이로드(JSON UTF-8)는 안전하다.
 """
 import base64
 import json
 import logging
+import re
 from typing import Optional, Tuple
 
 from fastapi import Request
@@ -96,10 +100,15 @@ def _decode_jwt_payload(token: str) -> dict:
         return {}
 
 
+_HANGUL = re.compile(r"[가-힣]")
+
+
 def _identity_from_request(request: Request) -> Tuple[str, str, str]:
     """
     x-cognito-* 헤더와 Authorization Bearer JWT 를 합쳐 sub, email, name 을 만든다.
-    헤더가 우선이며, 비어 있으면 Bearer IdToken 페이로드에서 채운다.
+
+    sub: 헤더(Gateway 검증값) 우선.
+    email/name: Bearer IdToken 클레임 우선 — 헤더는 한글 이름 등 비 ASCII 에서 깨지기 쉽다.
     """
     h_sub = (request.headers.get("x-cognito-sub") or "").strip()
     h_email = (request.headers.get("x-cognito-email") or "").strip()
@@ -117,9 +126,26 @@ def _identity_from_request(request: Request) -> Tuple[str, str, str]:
     c_name = str(claims.get("name") or "").strip()
 
     sub = h_sub or c_sub
-    email = h_email or c_email
-    name = h_name or c_name
+    email = c_email or h_email
+    name = c_name or h_name
     return sub, email, name
+
+
+def _should_resync_korean_name_from_jwt(db_name: str, jwt_name: str) -> bool:
+    """
+    예전에 x-cognito-name 헤더 깨짐 문자열이 DB 에 들어간 경우 보정.
+    JWT 이름에 표준 한글이 있는데 DB 값에는 한글 음절이 없으면 JWT 로 교체한다.
+    (영문 전용 표기 수동 변경과 JWT 한글 불일치는 드물다.)
+    """
+    j = (jwt_name or "").strip()
+    if not j or not _HANGUL.search(j):
+        return False
+    d = (db_name or "").strip()
+    if d == j:
+        return False
+    if _HANGUL.search(d):
+        return False
+    return bool(d)
 
 
 def _resolve_user_id(cognito_sub: str, email: str, name: str) -> Optional[int]:
@@ -148,6 +174,14 @@ def _resolve_user_id(cognito_sub: str, email: str, name: str) -> Optional[int]:
                 if name and not (row.get("name") or "").strip():
                     cur.execute(
                         "UPDATE users SET name = %s WHERE user_id = %s AND (name IS NULL OR name = '')",
+                        (name, uid),
+                    )
+                    updated = True
+                elif name and _should_resync_korean_name_from_jwt(
+                    str(row.get("name") or ""), name
+                ):
+                    cur.execute(
+                        "UPDATE users SET name = %s WHERE user_id = %s",
                         (name, uid),
                     )
                     updated = True

@@ -5,7 +5,7 @@
 #   - GitHub Secret AWS_ACCOUNT_ID 자동 등록 (gh CLI 있을 때)
 #
 # argocd/application.yaml 의 repoURL 은 더 이상 이 스크립트가 건드리지 않는다.
-# terraform/argocd.tf 의 local_file 이 var.github_repo 기반으로
+# terraform/argocd.tf 의 local_file 이 var.github_repo + var.argocd_target_revision 기반으로
 # argocd/application.rendered.yaml 을 직접 렌더한다 (git 커밋·push 불필요).
 #
 # 사용:  bash scripts/prepare.sh
@@ -76,6 +76,24 @@ sed_in_place "s|^cognito_domain_prefix.*|cognito_domain_prefix = \"$COGNITO_PREF
 sed_in_place "s|^github_repo.*|github_repo = \"$OWNER_REPO\"|" "$TFVARS"
 echo "  cognito_domain_prefix = $COGNITO_PREFIX"
 echo "  github_repo           = $OWNER_REPO"
+
+# ── 4b. ArgoCD 추적 브랜치 (terraform var.argocd_target_revision) ──
+# 기본값은 terraform/variables.tf 의 FINAL 이라, teamproject 등 작업 브랜치만 쓰면
+# ArgoCD 가 존재하지 않는 리비전을 보며 sync 상태가 Unknown 으로 멈출 수 있음.
+# 현재 체크아웃 브랜치와 맞춘다 (FINAL 브랜치에서 작업 중이면 FINAL 로 유지됨).
+GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [[ -z "$GIT_BRANCH" || "$GIT_BRANCH" == "HEAD" ]]; then
+  echo "  WARN: 현재 브랜치를 알 수 없음(detached HEAD 등). argocd_target_revision 은 수동으로 terraform.tfvars 에 설정하세요." >&2
+else
+  if grep -q '^argocd_target_revision[[:space:]]*=' "$TFVARS" 2>/dev/null; then
+    sed_in_place "s|^argocd_target_revision.*|argocd_target_revision = \"$GIT_BRANCH\"|" "$TFVARS"
+  else
+    echo "" >> "$TFVARS"
+    echo "# ArgoCD Application 이 추적할 브랜치·태그 (prepare.sh 가 현재 브랜치로 설정)" >> "$TFVARS"
+    echo "argocd_target_revision = \"$GIT_BRANCH\"" >> "$TFVARS"
+  fi
+  echo "  argocd_target_revision = $GIT_BRANCH  (ArgoCD ← 이 Git 브랜치)"
+fi
 
 # ── 5. DB 비밀번호 입력 → .env.local ──
 ENV_FILE=".env.local"

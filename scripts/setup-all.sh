@@ -374,28 +374,32 @@ bash "$SCRIPTS/install-argocd.sh"
 # ── 11. ArgoCD Application Synced + Healthy 대기 ──
 # ArgoCD가 git을 폴링하여 k8s/ 전체를 cluster에 적용. Deployment가 생성되면
 # pod가 위에서 push한 이미지를 pull하고 Ready 상태가 되어야 Healthy 판정.
-# 첫 sync는 보통 1~3분 내 완료. Ingress가 ALB를 provision하는 데 추가 1~2분.
+# 첫 sync는 보통 1~3분 내 완료. 길게 대기하면 스크립트만 멈추므로 상한은 짧게 두고,
+# 미완료 시 WARNING 후 다음 단계 진행 → 수동으로 ArgoCD UI 확인.
 echo ""
 echo "=========================================="
 echo " [11/14] ArgoCD Application Synced 대기"
 echo "=========================================="
-echo "ticketing Application 상태 폴링 (최대 10분)..."
+ARGOCD_SYNC_POLL_SEC=10
+ARGOCD_SYNC_MAX_ITER=12
+# 최대 대기 ≈ ARGOCD_SYNC_MAX_ITER * ARGOCD_SYNC_POLL_SEC (기본 120초)
+echo "ticketing Application 상태 폴링 (최대 약 $((ARGOCD_SYNC_MAX_ITER * ARGOCD_SYNC_POLL_SEC))초)..."
 # ArgoCD 'Suspended' 는 의도된 paused 상태 (KEDA ScaledObject 가 paused-replicas annotation 을
 # 갖고 있으면 발생). Deploy 자체는 성공이므로 Healthy/Suspended 둘 다 종료 조건.
-for i in $(seq 1 60); do
+for i in $(seq 1 "$ARGOCD_SYNC_MAX_ITER"); do
   SYNC=$(kubectl get application ticketing -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
   HEALTH=$(kubectl get application ticketing -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
   if [[ "$SYNC" == "Synced" && ( "$HEALTH" == "Healthy" || "$HEALTH" == "Suspended" ) ]]; then
-    echo "  Synced+${HEALTH} 달성 ($((i*10))s)"
+    echo "  Synced+${HEALTH} 달성 ($((i * ARGOCD_SYNC_POLL_SEC))s)"
     break
   fi
-  echo "  [$((i*10))s] sync=$SYNC health=$HEALTH"
-  if [[ "$i" -eq 60 ]]; then
-    echo "WARNING: 10분 내 Synced+Healthy/Suspended 안 됨. ArgoCD UI에서 확인 필요." >&2
+  echo "  [$((i * ARGOCD_SYNC_POLL_SEC))s] sync=$SYNC health=$HEALTH"
+  if [[ "$i" -eq "$ARGOCD_SYNC_MAX_ITER" ]]; then
+    echo "WARNING: $((ARGOCD_SYNC_MAX_ITER * ARGOCD_SYNC_POLL_SEC))초 내 Synced+Healthy/Suspended 미달 — ArgoCD UI에서 Refresh/Sync 또는 targetRevision 확인." >&2
     kubectl get application ticketing -n argocd -o jsonpath='{.status.conditions}' >&2 || true
     echo "" >&2
   fi
-  sleep 10
+  sleep "$ARGOCD_SYNC_POLL_SEC"
 done
 kubectl get pods -n ticketing
 

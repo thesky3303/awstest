@@ -264,81 +264,82 @@ CREATE TABLE IF NOT EXISTS concert_payment (
 
 -- =====================================================================
 -- 3) 인덱스(조건부 생성, 중복 실행 시에도 1061 방지)
+--    인덱스가 이미 있을 때는 DO 0 으로 no-op (SELECT 1 은 mysql 클라이언트에 1 행씩 출력됨)
 -- =====================================================================
 
 SET @__db := DATABASE();
 
 -- movies
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='movies' AND index_name='idx_movies_title');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_movies_title ON movies(title)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_movies_title ON movies(title)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='movies' AND index_name='idx_movies_status');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_movies_status ON movies(status)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_movies_status ON movies(status)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 -- halls / hall_seats
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='halls' AND index_name='idx_halls_theater_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_halls_theater_id ON halls(theater_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_halls_theater_id ON halls(theater_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='hall_seats' AND index_name='idx_hall_seats_hall_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_hall_seats_hall_id ON hall_seats(hall_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_hall_seats_hall_id ON hall_seats(hall_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='hall_seats' AND index_name='idx_hall_seats_status');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_hall_seats_status ON hall_seats(status)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_hall_seats_status ON hall_seats(status)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 -- schedules
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='schedules' AND index_name='idx_schedules_movie_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_movie_id ON schedules(movie_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_movie_id ON schedules(movie_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='schedules' AND index_name='idx_schedules_hall_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_hall_id ON schedules(hall_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_hall_id ON schedules(hall_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 -- schedules unique (hall_id, show_date) for deterministic upsert/seed
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='schedules' AND index_name='uq_schedules_hall_show_date');
-SET @__sql := IF(@__n=0,'CREATE UNIQUE INDEX uq_schedules_hall_show_date ON schedules(hall_id, show_date)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE UNIQUE INDEX uq_schedules_hall_show_date ON schedules(hall_id, show_date)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='schedules' AND index_name='idx_schedules_show_date');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_show_date ON schedules(show_date)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_show_date ON schedules(show_date)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='schedules' AND index_name='idx_schedules_status');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_status ON schedules(status)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_schedules_status ON schedules(status)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 -- booking
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='booking' AND index_name='idx_booking_user_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_user_id ON booking(user_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_user_id ON booking(user_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='booking' AND index_name='idx_booking_schedule_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_schedule_id ON booking(schedule_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_schedule_id ON booking(schedule_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='booking' AND index_name='idx_booking_status');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_status ON booking(book_status)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_status ON booking(book_status)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 -- booking_seats
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='booking_seats' AND index_name='idx_booking_seats_booking_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_booking_id ON booking_seats(booking_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_booking_id ON booking_seats(booking_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='booking_seats' AND index_name='idx_booking_seats_schedule_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_schedule_id ON booking_seats(schedule_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_schedule_id ON booking_seats(schedule_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='booking_seats' AND index_name='idx_booking_seats_seat_id');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_seat_id ON booking_seats(seat_id)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_seat_id ON booking_seats(seat_id)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
 SET @__n := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@__db AND table_name='booking_seats' AND index_name='idx_booking_seats_status');
-SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_status ON booking_seats(status)','SELECT 1');
+SET @__sql := IF(@__n=0,'CREATE INDEX idx_booking_seats_status ON booking_seats(status)','DO 0');
 PREPARE __stmt FROM @__sql; EXECUTE __stmt; DEALLOCATE PREPARE __stmt;
 
