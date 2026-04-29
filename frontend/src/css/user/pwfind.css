@@ -2,8 +2,22 @@
   max-width: 520px;
 }
 
+/* .pwfind-form 이 display:flex 라 [hidden] 단독으로는 폼이 안 숨겨짐 → 단계 래퍼로 처리 */
+.pwfind-step-verify[hidden],
+.pwfind-step-reset[hidden] {
+  display: none !important;
+}
+
+.pwfind-step-verify > .login-modal-subtitle {
+  margin-bottom: 18px;
+}
+
+.pwfind-reset-sub {
+  margin-bottom: 14px;
+}
+
 .pwfind-header {
-  margin-bottom: 28px;
+  margin-bottom: 20px;
 }
 
 .pwfind-form {

@@ -67,10 +67,12 @@
 
         <div class="login-modal-header pwfind-header">
           <h2 id="pwfind-modal-title" class="login-modal-title">PW 찾기</h2>
-          <p class="login-modal-subtitle pwfind-step-verify-sub">가입 시 사용한 이름과 이메일을 입력해 주세요.</p>
         </div>
 
-        <form class="pwfind-form pwfind-verify-form" novalidate>
+        <div class="pwfind-step-verify">
+          <p class="login-modal-subtitle pwfind-step-verify-sub">가입 시 사용한 이름과 이메일을 입력해 주세요.</p>
+
+          <form class="pwfind-form pwfind-verify-form" novalidate>
           <div class="pwfind-form-group">
             <input type="text" name="name" class="login-input pwfind-input" placeholder="이름" autocomplete="name" />
             <div class="pwfind-field-error" data-error-for="name"></div>
@@ -86,9 +88,11 @@
             <button type="submit" class="login-submit-button pwfind-submit-button pwfind-verify-submit">확인</button>
             <button type="button" class="pwfind-cancel-button">취소</button>
           </div>
-        </form>
+          </form>
+        </div>
 
         <div class="pwfind-step-reset" hidden>
+          <p class="login-modal-subtitle pwfind-reset-sub">새 비밀번호를 입력해 주세요.</p>
           <div class="pwfind-skip-banner" role="status"></div>
 
           <form class="pwfind-form pwfind-reset-form" novalidate>
@@ -124,6 +128,7 @@
   function bindEvents(overlay) {
     const closeButton = overlay.querySelector('.login-modal-close');
     const cancelButtons = overlay.querySelectorAll('.pwfind-cancel-button');
+    const stepVerify = overlay.querySelector('.pwfind-step-verify');
     const verifyForm = overlay.querySelector('.pwfind-verify-form');
     const resetForm = overlay.querySelector('.pwfind-reset-form');
     const stepReset = overlay.querySelector('.pwfind-step-reset');
@@ -206,8 +211,7 @@
         const msg =
           (result && result.message) || '이메일 인증 과정 생략';
         if (skipBanner) skipBanner.textContent = msg;
-        verifyForm.hidden = true;
-        overlay.querySelector('.pwfind-step-verify-sub').hidden = true;
+        if (stepVerify) stepVerify.hidden = true;
         stepReset.hidden = false;
         requestAnimationFrame(function () {
           passwordInput.focus();
