@@ -142,6 +142,21 @@
     });
   }
 
+  /**
+   * 비밀번호 변경 — Cognito 공개 API (백엔드 불필요). Access Token 필수.
+   */
+  function cognitoChangePassword(previousPassword, proposedPassword) {
+    var accessToken = getAccessToken();
+    if (!accessToken || isTokenExpired(accessToken)) {
+      return Promise.reject(new Error('세션이 만료되었습니다. 다시 로그인해 주세요.'));
+    }
+    return cognitoFetch('AWSCognitoIdentityProviderService.ChangePassword', {
+      AccessToken: accessToken,
+      PreviousPassword: previousPassword,
+      ProposedPassword: proposedPassword
+    });
+  }
+
   function cognitoLogout() {
     clearTokens();
     // Also clear legacy login user data
@@ -201,6 +216,7 @@
   window.CognitoAuth = {
     signUp:         cognitoSignUp,
     login:          cognitoLogin,
+    changePassword: cognitoChangePassword,
     refreshToken:   cognitoRefreshToken,
     logout:         cognitoLogout,
     getAccessToken: getAccessToken,

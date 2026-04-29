@@ -1,12 +1,24 @@
 (function () {
   const CHANGE_PW_CSS_PATH = '/css/user/changepw.css?v=3';
-  const USER_WRITE_CHANGE_PW_API = '/api/write/auth/change-password';
   const runtime = window.APP_RUNTIME || {};
 
   let isChangePwSubmitting = false;
 
-  async function requestChangePassword(payload) {
-    return runtime.postJson(USER_WRITE_CHANGE_PW_API, payload);
+  function cognitoChangePwErrorMessage(error) {
+    var code = String(error.code || error.__type || '');
+    if (code.indexOf('NotAuthorizedException') !== -1) {
+      return '현재 비밀번호가 올바르지 않습니다.';
+    }
+    if (code.indexOf('InvalidPasswordException') !== -1) {
+      return '새 비밀번호 형식이 정책에 맞지 않습니다. (8자 이상, 대·소문자·숫자 등)';
+    }
+    if (code.indexOf('LimitExceededException') !== -1) {
+      return '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.';
+    }
+    if (code.indexOf('TooManyRequestsException') !== -1) {
+      return '잠시 후 다시 시도해 주세요.';
+    }
+    return error.message || '비밀번호 변경에 실패했습니다.';
   }
 
   function renderChangePwLayout() {
@@ -86,8 +98,8 @@
     if (!newPassword) {
       setFieldError('new-password-error', '새 비밀번호를 입력해 주세요.');
       ok = false;
-    } else if (newPassword.length < 4) {
-      setFieldError('new-password-error', '새 비밀번호는 4자 이상 입력해 주세요.');
+    } else if (newPassword.length < 8) {
+      setFieldError('new-password-error', '새 비밀번호는 8자 이상 입력해 주세요.');
       ok = false;
     }
 
@@ -145,6 +157,15 @@
         return;
       }
 
+      if (!window.CognitoAuth || typeof window.CognitoAuth.changePassword !== 'function') {
+        setCommonError('인증 모듈을 불러오지 못했습니다. 페이지를 새로고침 후 다시 시도해 주세요.');
+        return;
+      }
+      if (!window.CognitoAuth.isLoggedIn || !window.CognitoAuth.isLoggedIn()) {
+        setCommonError('로그인 세션이 없습니다. 다시 로그인해 주세요.');
+        return;
+      }
+
       if (!validateChangePwForm(currentPassword, newPassword, newPasswordCheck)) {
         return;
       }
@@ -154,18 +175,14 @@
       submitButton.textContent = '변경중...';
 
       try {
-        await requestChangePassword({
-          user_id: userId,
-          current_password: currentPassword,
-          new_password: newPassword
-        });
+        await window.CognitoAuth.changePassword(currentPassword, newPassword);
 
         alert('비밀번호가 변경되었습니다.');
 
         window.location.href = `${window.location.pathname}?view=mypage`;
       } catch (error) {
         console.error('[changepw] submit error:', error);
-        setCommonError(error.message || '비밀번호 변경 중 오류가 발생했습니다.');
+        setCommonError(cognitoChangePwErrorMessage(error));
       } finally {
         isChangePwSubmitting = false;
         submitButton.disabled = false;
@@ -179,6 +196,14 @@
       await runtime.ensureStyle(CHANGE_PW_CSS_PATH);
     } catch (error) {
       console.error('[changepw] css load error:', error);
+    }
+
+    try {
+      if (typeof runtime.ensureScript === 'function') {
+        await runtime.ensureScript('/js/common/cognito-auth.js');
+      }
+    } catch (error) {
+      console.error('[changepw] cognito-auth load error:', error);
     }
 
     if (runtime.resetPrimarySections) {
