@@ -195,7 +195,12 @@
       verifySubmit.textContent = '확인 중...';
 
       try {
-        const result = await runtime.postJson(VERIFY_API, { name: name, email: email });
+        // 공개 API: Bearer 를 붙이면 만료 토큰 시 401 → requestJson 이 로그인 모달을 띄움
+        const result = await runtime.postJson(
+          VERIFY_API,
+          { name: name, email: email },
+          { noAuth: true }
+        );
         verifiedName = name;
         verifiedEmail = email;
         const msg =
@@ -253,11 +258,15 @@
       resetSubmit.textContent = '변경 중...';
 
       try {
-        await runtime.postJson(RESET_API, {
-          name: verifiedName,
-          email: verifiedEmail,
-          new_password: password
-        });
+        await runtime.postJson(
+          RESET_API,
+          {
+            name: verifiedName,
+            email: verifiedEmail,
+            new_password: password
+          },
+          { noAuth: true }
+        );
         alert('비밀번호가 변경되었습니다.');
         goToLoginPage();
       } catch (error) {
