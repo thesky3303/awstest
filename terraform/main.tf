@@ -241,6 +241,22 @@ module "cognito" {
   cloudfront_domain = var.frontend_callback_domain
 }
 
+# write-api·worker 가 쓰는 IRSA(sqs-access-sa): 비밀번호 찾기 시 AdminSetUserPassword
+# (클라이언트 토큰으로는 ChangePassword 불가 — 기존 비밀번호 필요)
+resource "aws_iam_role_policy" "ticketing_sqs_access_cognito_password_reset" {
+  name = "${var.app_name}-sqs-sa-cognito-admin-set-password"
+  role = module.eks.sqs_access_role_name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "AllowAdminSetUserPasswordForRecovery"
+      Effect   = "Allow"
+      Action   = ["cognito-idp:AdminSetUserPassword"]
+      Resource = module.cognito.user_pool_arn
+    }]
+  })
+}
+
 module "api_gateway" {
   source     = "./modules/api_gateway"
   env        = var.env

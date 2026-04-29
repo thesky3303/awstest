@@ -51,6 +51,8 @@ fi
 
 SQS_QUEUE_NAME="${SQS_QUEUE_NAME:-ticketing-reservation.fifo}"
 
+COGNITO_USER_POOL_ID="$(terraform -chdir="$TF_DIR" output -raw cognito_user_pool_id 2>/dev/null || true)"
+
 if [ -n "${POST_APPLY_SQS_QUEUE_URL:-}" ]; then
   SQS_QUEUE_URL="$POST_APPLY_SQS_QUEUE_URL"
 else
@@ -68,6 +70,7 @@ kubectl create secret generic "$SECRET_NAME" -n "$NAMESPACE" \
   --from-literal=REDIS_HOST="$REDIS_EP" \
   --from-literal=SQS_QUEUE_NAME="$SQS_QUEUE_NAME" \
   --from-literal=SQS_QUEUE_URL="$SQS_QUEUE_URL" \
+  --from-literal=COGNITO_USER_POOL_ID="${COGNITO_USER_POOL_ID:-}" \
   --dry-run=client -o yaml \
   | kubectl apply -f -
 
