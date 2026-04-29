@@ -486,6 +486,23 @@
     modalState.savedScrollY = 0;
   }
 
+  function pickHttpErrorMessage(data, status) {
+    if (!data || typeof data !== 'object') {
+      return `HTTP ${status}`;
+    }
+    if (data.message) {
+      return String(data.message);
+    }
+    const d = data.detail;
+    if (typeof d === 'string') {
+      return d;
+    }
+    if (Array.isArray(d) && d.length && d[0] && typeof d[0].msg === 'string') {
+      return d[0].msg;
+    }
+    return `HTTP ${status}`;
+  }
+
   async function requestJson(url, options) {
     const opts = options || {};
     const resolvedPath = resolveTicketingApiUrl(url);
@@ -562,9 +579,7 @@
         }
       }
 
-      const message = data && typeof data === 'object' && data.message
-        ? data.message
-        : `HTTP ${response.status}`;
+      const message = pickHttpErrorMessage(data, response.status);
       const httpError = new Error(message);
       httpError.status = response.status;
       httpError.data = data;

@@ -70,11 +70,22 @@ PUBLIC_EXACT_PATHS = {
     "/api/write/auth/recover-reset",
 }
 
+# API Gateway 스테이지·리버스 프록시로 path 가 `/prod/api/read/...` 처럼 앞에 세그먼트가 붙어도
+# 비밀번호 찾기는 공개로 처리해야 함 (정확 일치만 하면 401 Unauthorized).
+_PUBLIC_PATH_SUFFIXES = (
+    "/api/read/auth/recover-verify",
+    "/api/write/auth/recover-reset",
+)
+
 
 def _is_public_path(path: str) -> bool:
     """인증이 필요 없는 공개 경로인지 판단."""
-    if path in PUBLIC_EXACT_PATHS:
+    normalized = path.rstrip("/") or "/"
+    if normalized in PUBLIC_EXACT_PATHS:
         return True
+    for suf in _PUBLIC_PATH_SUFFIXES:
+        if normalized.endswith(suf):
+            return True
     # 대기열(Waiting Room) 경로는 어디에 박혀 있든 공개.
     # /api/write/concerts/waiting-room/status/{ref}, /api/write/concerts/{show_id}/waiting-room/enter
     # 등 show_id 가 path param 으로 중간에 끼는 케이스가 있어서 단순 prefix 매칭으로는 커버 불가.
