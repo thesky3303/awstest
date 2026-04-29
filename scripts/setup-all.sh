@@ -381,8 +381,8 @@ echo "=========================================="
 echo " [11/14] ArgoCD Application Synced 대기"
 echo "=========================================="
 ARGOCD_SYNC_POLL_SEC=10
-ARGOCD_SYNC_MAX_ITER=12
-# 최대 대기 ≈ ARGOCD_SYNC_MAX_ITER * ARGOCD_SYNC_POLL_SEC (기본 120초)
+ARGOCD_SYNC_MAX_ITER=3
+# 최대 대기 ≈ ARGOCD_SYNC_MAX_ITER * ARGOCD_SYNC_POLL_SEC (기본 30초)
 echo "ticketing Application 상태 폴링 (최대 약 $((ARGOCD_SYNC_MAX_ITER * ARGOCD_SYNC_POLL_SEC))초)..."
 # ArgoCD 'Suspended' 는 의도된 paused 상태 (KEDA ScaledObject 가 paused-replicas annotation 을
 # 갖고 있으면 발생). Deploy 자체는 성공이므로 Healthy/Suspended 둘 다 종료 조건.

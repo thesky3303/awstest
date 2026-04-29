@@ -142,6 +142,9 @@ resource "aws_apigatewayv2_route" "api_public" {
     # enter: 대기표 발급 / status: 대기 순번 조회 — 둘 다 로그인 전 필요
     "POST /api/write/concerts/{show_id}/waiting-room/enter",
     "GET /api/write/concerts/waiting-room/status/{queue_ref}",
+    # 비밀번호 찾기(익명): JWT Authorizer 없이 VPC Link → ALB (WAS 에서 DB+Cognito AdminSetUserPassword)
+    "POST /api/read/auth/recover-verify",
+    "POST /api/write/auth/recover-reset",
     # CORS preflight
     "OPTIONS /api/{proxy+}",
   ]) : toset([])
